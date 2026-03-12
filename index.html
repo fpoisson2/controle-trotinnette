@@ -1,0 +1,1107 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Trottinette Intelligente</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #30363d;
+    --text:     #e6edf3;
+    --muted:    #8b949e;
+    --accent:   #58a6ff;
+    --green:    #3fb950;
+    --yellow:   #d29922;
+    --red:      #f85149;
+    --orange:   #e3703a;
+    --radius:   8px;
+    --nav-h:    60px;
+    --header-h: 48px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    display: grid;
+    grid-template-rows: var(--header-h) 1fr;
+    overflow: hidden;
+    height: 100dvh;
+  }
+
+  /* ── Header ── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 10px;
+    min-width: 0;
+  }
+  header h1 {
+    font-size: 14px; font-weight: 700;
+    letter-spacing: 0.06em; color: var(--accent);
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .indicators { display: flex; gap: 8px; align-items: center; }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--border);
+    transition: background 0.3s;
+    flex-shrink: 0;
+  }
+  .dot.on  { background: var(--green);  box-shadow: 0 0 5px var(--green); }
+  .dot.err { background: var(--red);    box-shadow: 0 0 5px var(--red); }
+  .dot.warn{ background: var(--yellow); box-shadow: 0 0 5px var(--yellow); }
+  .ind-label { font-size: 11px; color: var(--muted); }
+  .mode-badge {
+    background: var(--border); border-radius: 4px;
+    padding: 2px 7px; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.08em; color: var(--accent); flex-shrink: 0;
+  }
+  .hdr-btn {
+    background: none; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 4px; padding: 3px 9px; cursor: pointer; font-size: 11px;
+    transition: all 0.2s; flex-shrink: 0;
+  }
+  .hdr-btn.active { border-color: var(--yellow); color: var(--yellow); }
+
+  /* ── Desktop layout ── */
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 1px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .panel {
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .right-col {
+    display: flex; flex-direction: column;
+    gap: 1px; overflow: hidden;
+    background: var(--border);
+  }
+  .controls-row { display: flex; gap: 1px; flex: 0 0 auto; }
+  .controls-row .panel { flex: 1; }
+  .panel-title {
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted);
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .panel-body { flex: 1; overflow: hidden; padding: 12px; }
+
+  /* ── Carte ── */
+  #map { width: 100%; height: 100%; border-radius: var(--radius); }
+  .map-panel .panel-body { padding: 8px; }
+
+  /* ── Jauges ── */
+  .gauges-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 10px; height: 100%;
+  }
+  .gauge-item {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 4px;
+  }
+  .gauge-label { font-size: 11px; color: var(--muted); letter-spacing: 0.05em; }
+  .gauge-value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .gauge-unit  { font-size: 11px; color: var(--muted); }
+  .gauge-arc-wrap { position: relative; width: 80px; height: 48px; overflow: hidden; }
+  .gauge-arc-wrap svg { position: absolute; top: 0; left: 0; }
+
+  /* ── Contrôle manuel ── */
+  .ctrl-panel .panel-body {
+    display: flex; flex-direction: column;
+    gap: 10px; justify-content: center;
+  }
+  .btn-row { display: flex; gap: 8px; }
+  .btn {
+    flex: 1; padding: 10px 4px;
+    border: 1px solid var(--border);
+    background: transparent; color: var(--text);
+    border-radius: var(--radius); cursor: pointer;
+    font-size: 13px; font-weight: 700;
+    transition: all 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active { transform: scale(0.96); }
+  .btn.forward { border-color: var(--green);  color: var(--green); }
+  .btn.brake   { border-color: var(--yellow); color: var(--yellow); }
+  .btn.stop    { border-color: var(--red);    color: var(--red); }
+  .btn.forward:active { background: rgba(63,185,80,0.15); }
+  .btn.brake:active   { background: rgba(210,153,34,0.15); }
+  .btn.stop:active    { background: rgba(248,81,73,0.15); }
+  .slider-row { display: flex; align-items: center; gap: 8px; }
+  .slider-row label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  #intensity-slider { flex: 1; accent-color: var(--accent); }
+  #intensity-val { font-size: 13px; font-weight: 700; width: 36px; text-align: right; }
+
+  /* ── Commande vocale ── */
+  .voice-panel .panel-body {
+    display: flex; flex-direction: column;
+    gap: 8px; align-items: center; justify-content: center;
+  }
+  #ptt-btn {
+    width: 70px; height: 70px; border-radius: 50%;
+    border: 2px solid var(--accent);
+    background: transparent; color: var(--accent);
+    font-size: 26px; cursor: pointer;
+    transition: all 0.15s;
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #ptt-btn.active {
+    border-color: var(--red); color: var(--red);
+    background: rgba(248,81,73,0.12);
+    box-shadow: 0 0 20px rgba(248,81,73,0.35);
+    animation: pulse 1s infinite;
+  }
+  @keyframes pulse {
+    0%,100%{ box-shadow: 0 0 16px rgba(248,81,73,0.3); }
+    50%    { box-shadow: 0 0 28px rgba(248,81,73,0.65); }
+  }
+  #voice-status { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; text-align: center; }
+
+  /* ── Journal ── */
+  .log-panel { flex: 1; min-height: 0; }
+  .log-panel .panel-body { padding: 0; }
+  #voice-log {
+    height: 100%; overflow-y: auto;
+    padding: 8px 12px;
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  #voice-log::-webkit-scrollbar { width: 4px; }
+  #voice-log::-webkit-scrollbar-track { background: transparent; }
+  #voice-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-entry {
+    padding: 5px 8px; border-radius: 4px;
+    font-size: 12px; line-height: 1.4;
+    border-left: 2px solid transparent;
+  }
+  .log-entry.transcript { border-color: var(--muted); color: var(--muted); }
+  .log-entry.ai         { border-color: var(--accent); color: var(--text); }
+  .log-entry.cmd        { border-color: var(--green); background: rgba(63,185,80,0.08); color: var(--green); font-weight: 700; }
+  .log-entry.system     { border-color: var(--border); color: var(--muted); font-style: italic; }
+  .log-time { font-size: 10px; color: var(--muted); margin-right: 5px; opacity: 0.7; }
+
+  /* ── Login ── */
+  #login-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 0.3s;
+    padding: 16px;
+  }
+  #login-overlay.hidden { opacity: 0; pointer-events: none; }
+  .login-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 36px 32px;
+    width: 100%; max-width: 340px;
+    display: flex; flex-direction: column; gap: 20px;
+  }
+  .login-card h2 {
+    font-size: 13px; font-weight: 700;
+    letter-spacing: 0.12em; color: var(--accent); text-align: center;
+  }
+  .login-fields { display: flex; flex-direction: column; gap: 12px; }
+  .login-fields input {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text);
+    font-size: 16px; /* évite le zoom iOS sur focus */
+    padding: 12px 14px; outline: none;
+    transition: border-color 0.2s; width: 100%;
+  }
+  .login-fields input:focus { border-color: var(--accent); }
+  .login-fields input.error  { border-color: var(--red); }
+  #login-submit {
+    background: var(--accent); border: none; border-radius: var(--radius);
+    color: #0d1117; font-size: 14px; font-weight: 700;
+    letter-spacing: 0.08em; padding: 13px;
+    cursor: pointer; transition: opacity 0.2s;
+  }
+  #login-submit:active  { opacity: 0.8; }
+  #login-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+  #login-error { font-size: 12px; color: var(--red); text-align: center; min-height: 16px; }
+  @keyframes shake {
+    0%,100%{ transform:translateX(0) }
+    20%    { transform:translateX(-6px) }
+    40%    { transform:translateX(6px) }
+    60%    { transform:translateX(-4px) }
+    80%    { transform:translateX(4px) }
+  }
+  .login-card.shake { animation: shake 0.35s ease; }
+
+  /* ── Bottom nav (mobile uniquement) ── */
+  .bottom-nav {
+    display: none;
+    position: fixed; bottom: 0; left: 0; right: 0;
+    height: var(--nav-h);
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    z-index: 100;
+  }
+  .bottom-nav-inner {
+    display: flex; height: 100%;
+  }
+  .nav-tab {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 3px;
+    background: none; border: none; cursor: pointer;
+    color: var(--muted); font-size: 9px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    transition: color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    padding: 0;
+  }
+  .nav-tab .nav-icon { font-size: 20px; line-height: 1; }
+  .nav-tab.active { color: var(--accent); }
+  .nav-tab.active .nav-icon { filter: drop-shadow(0 0 4px var(--accent)); }
+
+  /* ── Scrollbar global ── */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); }
+
+  /* ── Leaflet override ── */
+  .leaflet-container { background: #1a1f27 !important; }
+  .leaflet-tile { filter: invert(1) hue-rotate(180deg) brightness(0.9); }
+
+  /* ════════════════════════════════════════
+     MOBILE  (<= 767 px)
+  ════════════════════════════════════════ */
+  @media (max-width: 767px) {
+
+    body {
+      grid-template-rows: var(--header-h) 1fr;
+    }
+
+    /* Masquer les labels de dot sur mobile */
+    .ind-label { display: none; }
+    .mode-badge { font-size: 10px; padding: 2px 5px; }
+    .hdr-btn { padding: 3px 7px; font-size: 10px; }
+    header h1 { font-size: 12px; }
+
+    /* La zone principale devient un conteneur de "pages" empilées */
+    .main {
+      display: block;
+      position: relative;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    /* Chaque onglet = une page plein écran */
+    .tab-section {
+      position: absolute; inset: 0;
+      bottom: 0; /* pas de nav-h ici car la nav est fixed */
+      display: none;
+      flex-direction: column;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .tab-section.active { display: flex; }
+
+    /* Carte */
+    #tab-map { padding: 0; }
+    #tab-map #map { border-radius: 0; height: 100%; width: 100%; }
+
+    /* Télémétrie : grille 2x2 centrée */
+    #tab-telemetry {
+      align-items: center; justify-content: center;
+      padding: 20px 16px;
+    }
+    #tab-telemetry .gauges-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 20px; width: 100%;
+    }
+    #tab-telemetry .gauge-item { gap: 6px; }
+    #tab-telemetry .gauge-arc-wrap { width: 100px; height: 60px; }
+    #tab-telemetry .gauge-arc-wrap svg { width: 100px; height: 60px; }
+    #tab-telemetry .gauge-value { font-size: 28px; }
+    #tab-telemetry .gauge-unit  { font-size: 13px; }
+    #tab-telemetry .gauge-label { font-size: 12px; }
+
+    /* Contrôle : PTT grand + boutons + slider */
+    #tab-control {
+      padding: 24px 20px;
+      gap: 20px; justify-content: center;
+      overflow-y: auto;
+    }
+    #tab-control #ptt-btn {
+      width: 110px; height: 110px;
+      font-size: 44px;
+      border-width: 3px;
+      align-self: center;
+    }
+    #tab-control #voice-status {
+      font-size: 13px; text-align: center; align-self: center;
+    }
+    #tab-control .divider {
+      border: none; border-top: 1px solid var(--border);
+      margin: 0;
+    }
+    #tab-control .btn-row { gap: 10px; }
+    #tab-control .btn {
+      padding: 16px 4px; font-size: 14px;
+    }
+    #tab-control .slider-row { gap: 10px; }
+    #tab-control #intensity-val { font-size: 14px; }
+
+    /* Journal */
+    #tab-log {
+      flex-direction: column; overflow: hidden;
+    }
+    #tab-log #voice-log {
+      flex: 1; overflow-y: auto; padding: 12px 14px;
+      font-size: 13px;
+    }
+    #tab-log .log-entry { padding: 7px 10px; font-size: 13px; }
+
+    /* Cacher le desktop layout */
+    .right-col, .controls-row { display: none; }
+    .panel.map-panel { display: none; }
+
+    /* Afficher la nav */
+    .bottom-nav { display: block; }
+
+    /* Le contenu doit laisser la place à la nav */
+    .main {
+      margin-bottom: var(--nav-h);
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Écran de login ── -->
+<div id="login-overlay">
+  <div class="login-card" id="login-card">
+    <h2>TROTTINETTE INTELLIGENTE</h2>
+    <div class="login-fields">
+      <input id="login-user" type="text" placeholder="Identifiant" autocomplete="username">
+      <input id="login-pass" type="password" placeholder="Mot de passe" autocomplete="current-password">
+      <button id="login-submit">CONNEXION</button>
+      <div id="login-error"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Header ── -->
+<header>
+  <h1>TROTTINETTE INTELLIGENTE</h1>
+  <div class="indicators">
+    <span class="dot" id="dot-sse"  title="Proxy SSE"></span>
+    <span class="ind-label">Proxy</span>
+    <span class="dot" id="dot-ws"   title="WebSocket trottinette"></span>
+    <span class="ind-label">Scooter</span>
+    <span class="dot" id="dot-ai"   title="IA"></span>
+    <span class="ind-label">IA</span>
+  </div>
+  <span class="mode-badge" id="mode-badge">CLOUD</span>
+  <button class="hdr-btn" id="sim-btn" onclick="toggleSim()">SIM</button>
+  <button class="hdr-btn" onclick="logout()" title="Déconnexion">⏻</button>
+</header>
+
+<!-- ══════════════════════════════════════════
+     DESKTOP layout (caché sur mobile par CSS)
+════════════════════════════════════════════ -->
+<div class="main" id="main-desktop">
+
+  <!-- Carte -->
+  <div class="panel map-panel">
+    <div class="panel-title">Carte en direct</div>
+    <div class="panel-body"><div id="map-desktop"></div></div>
+  </div>
+
+  <!-- Colonne droite -->
+  <div class="right-col">
+
+    <!-- Jauges -->
+    <div class="panel">
+      <div class="panel-title">Télémétrie</div>
+      <div class="panel-body">
+        <div class="gauges-grid">
+          <div class="gauge-item">
+            <div class="gauge-arc-wrap">
+              <svg width="80" height="48" viewBox="0 0 80 48">
+                <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
+                <path id="arc-speed" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#58a6ff" stroke-width="6"
+                      stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
+              </svg>
+            </div>
+            <div class="gauge-value" id="val-speed">0</div>
+            <div class="gauge-unit">km/h</div>
+            <div class="gauge-label">VITESSE</div>
+          </div>
+          <div class="gauge-item">
+            <div class="gauge-arc-wrap">
+              <svg width="80" height="48" viewBox="0 0 80 48">
+                <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
+                <path id="arc-voltage" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#3fb950" stroke-width="6"
+                      stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
+              </svg>
+            </div>
+            <div class="gauge-value" id="val-voltage">0.0</div>
+            <div class="gauge-unit">V</div>
+            <div class="gauge-label">BATTERIE</div>
+          </div>
+          <div class="gauge-item">
+            <div class="gauge-arc-wrap">
+              <svg width="80" height="48" viewBox="0 0 80 48">
+                <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
+                <path id="arc-current" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#e3703a" stroke-width="6"
+                      stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
+              </svg>
+            </div>
+            <div class="gauge-value" id="val-current">0.0</div>
+            <div class="gauge-unit">A</div>
+            <div class="gauge-label">COURANT</div>
+          </div>
+          <div class="gauge-item">
+            <div class="gauge-arc-wrap">
+              <svg width="80" height="48" viewBox="0 0 80 48">
+                <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
+                <path id="arc-temp" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#d29922" stroke-width="6"
+                      stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
+              </svg>
+            </div>
+            <div class="gauge-value" id="val-temp">0</div>
+            <div class="gauge-unit">°C</div>
+            <div class="gauge-label">TEMP MOTEUR</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Vocal + Manuel côte à côte -->
+    <div class="controls-row">
+      <div class="panel voice-panel">
+        <div class="panel-title">Commande vocale</div>
+        <div class="panel-body">
+          <button id="ptt-btn-desktop" class="ptt-btn-inner" title="Activer/désactiver le micro">🎤</button>
+          <div id="voice-status-desktop" class="voice-status-inner">INACTIF — cliquer pour parler</div>
+        </div>
+      </div>
+      <div class="panel ctrl-panel">
+        <div class="panel-title">Contrôle manuel</div>
+        <div class="panel-body">
+          <div class="btn-row">
+            <button class="btn forward" onclick="sendCmd('forward')">▲ AVANCER</button>
+            <button class="btn brake"   onclick="sendCmd('brake')">◼ FREINER</button>
+            <button class="btn stop"    onclick="sendCmd('stop')">✕ ARRÊT</button>
+          </div>
+          <div class="slider-row">
+            <label>INTENSITÉ</label>
+            <input type="range" id="intensity-slider" min="0" max="100" value="50"
+                   oninput="document.getElementById('intensity-val').textContent=this.value+'%'">
+            <span id="intensity-val">50%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Journal -->
+    <div class="panel log-panel">
+      <div class="panel-title">Journal vocal</div>
+      <div class="panel-body">
+        <div id="voice-log-desktop"></div>
+      </div>
+    </div>
+
+  </div><!-- /right-col -->
+</div><!-- /main-desktop -->
+
+<!-- ══════════════════════════════════════════
+     MOBILE : sections onglets
+     (display:none sur desktop via CSS)
+════════════════════════════════════════════ -->
+<div class="main" id="main-mobile" style="display:none">
+
+  <!-- Onglet Carte -->
+  <div class="tab-section active" id="tab-map">
+    <div id="map"></div>
+  </div>
+
+  <!-- Onglet Télémétrie -->
+  <div class="tab-section" id="tab-telemetry">
+    <div class="gauges-grid">
+      <div class="gauge-item">
+        <div class="gauge-arc-wrap">
+          <svg viewBox="0 0 80 48">
+            <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
+            <path id="arc-speed-m" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#58a6ff" stroke-width="6"
+                  stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
+          </svg>
+        </div>
+        <div class="gauge-value" id="val-speed-m">0</div>
+        <div class="gauge-unit">km/h</div>
+        <div class="gauge-label">VITESSE</div>
+      </div>
+      <div class="gauge-item">
+        <div class="gauge-arc-wrap">
+          <svg viewBox="0 0 80 48">
+            <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
+            <path id="arc-voltage-m" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#3fb950" stroke-width="6"
+                  stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
+          </svg>
+        </div>
+        <div class="gauge-value" id="val-voltage-m">0.0</div>
+        <div class="gauge-unit">V</div>
+        <div class="gauge-label">BATTERIE</div>
+      </div>
+      <div class="gauge-item">
+        <div class="gauge-arc-wrap">
+          <svg viewBox="0 0 80 48">
+            <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
+            <path id="arc-current-m" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#e3703a" stroke-width="6"
+                  stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
+          </svg>
+        </div>
+        <div class="gauge-value" id="val-current-m">0.0</div>
+        <div class="gauge-unit">A</div>
+        <div class="gauge-label">COURANT</div>
+      </div>
+      <div class="gauge-item">
+        <div class="gauge-arc-wrap">
+          <svg viewBox="0 0 80 48">
+            <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
+            <path id="arc-temp-m" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#d29922" stroke-width="6"
+                  stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
+          </svg>
+        </div>
+        <div class="gauge-value" id="val-temp-m">0</div>
+        <div class="gauge-unit">°C</div>
+        <div class="gauge-label">TEMP MOTEUR</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Onglet Contrôle -->
+  <div class="tab-section" id="tab-control">
+    <button id="ptt-btn" title="Activer/désactiver le micro">🎤</button>
+    <div id="voice-status">INACTIF — appuyer pour parler</div>
+    <hr class="divider">
+    <div class="btn-row">
+      <button class="btn forward" onclick="sendCmd('forward')">▲ AVANCER</button>
+      <button class="btn brake"   onclick="sendCmd('brake')">◼ FREINER</button>
+      <button class="btn stop"    onclick="sendCmd('stop')">✕ ARRÊT</button>
+    </div>
+    <div class="slider-row">
+      <label>INTENSITÉ</label>
+      <input type="range" id="intensity-slider-m" min="0" max="100" value="50"
+             oninput="syncSlider(this)">
+      <span id="intensity-val-m">50%</span>
+    </div>
+  </div>
+
+  <!-- Onglet Journal -->
+  <div class="tab-section" id="tab-log">
+    <div id="voice-log"></div>
+  </div>
+
+</div><!-- /main-mobile -->
+
+<!-- ── Navigation mobile ── -->
+<nav class="bottom-nav">
+  <div class="bottom-nav-inner">
+    <button class="nav-tab active" data-tab="map"       onclick="showTab('map')">
+      <span class="nav-icon">🗺️</span>Carte
+    </button>
+    <button class="nav-tab"        data-tab="telemetry" onclick="showTab('telemetry')">
+      <span class="nav-icon">📊</span>Données
+    </button>
+    <button class="nav-tab"        data-tab="control"   onclick="showTab('control')">
+      <span class="nav-icon">🎙️</span>Contrôle
+    </button>
+    <button class="nav-tab"        data-tab="log"       onclick="showTab('log')">
+      <span class="nav-icon">📋</span>Journal
+    </button>
+  </div>
+</nav>
+
+<script>
+// ─── Détection mobile ─────────────────────────────────────────────────────────
+const isMobile = () => window.innerWidth <= 767;
+
+// ─── Configuration ────────────────────────────────────────────────────────────
+const AUDIO_CHUNK = 4096;
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+const TOKEN_KEY = 'trottinette_token';
+function getToken() { return sessionStorage.getItem(TOKEN_KEY); }
+function authFetch(url, opts = {}) {
+  const token = getToken();
+  return fetch(url, {
+    ...opts,
+    headers: { ...opts.headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+  });
+}
+function logout() { sessionStorage.removeItem(TOKEN_KEY); location.reload(); }
+
+// ── Login ─────────────────────────────────────────────────────────────────────
+document.getElementById('login-submit').addEventListener('click', doLogin);
+document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+document.getElementById('login-user').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('login-pass').focus(); });
+
+async function doLogin() {
+  const btn   = document.getElementById('login-submit');
+  const card  = document.getElementById('login-card');
+  const errEl = document.getElementById('login-error');
+  const user  = document.getElementById('login-user').value.trim();
+  const pass  = document.getElementById('login-pass').value;
+  errEl.textContent = ''; btn.disabled = true; btn.textContent = 'CONNEXION...';
+  try {
+    const r    = await fetch('/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:user,password:pass}) });
+    const data = await r.json();
+    if (!r.ok) {
+      errEl.textContent = data.error || 'Erreur inconnue';
+      card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+      document.getElementById('login-pass').value = '';
+      document.getElementById('login-user').classList.add('error');
+      document.getElementById('login-pass').classList.add('error');
+    } else {
+      sessionStorage.setItem(TOKEN_KEY, data.token);
+      const overlay = document.getElementById('login-overlay');
+      overlay.classList.add('hidden');
+      setTimeout(() => { overlay.style.display = 'none'; }, 300);
+      initApp();
+    }
+  } catch { errEl.textContent = 'Erreur de connexion au serveur'; }
+  finally { btn.disabled = false; btn.textContent = 'CONNEXION'; }
+}
+
+(async function checkAuth() {
+  const token = getToken();
+  if (!token) return;
+  try {
+    const r = await fetch('/status', { headers: { Authorization: `Bearer ${token}` } });
+    if (r.ok) { document.getElementById('login-overlay').style.display = 'none'; initApp(); }
+  } catch (_) {}
+})();
+
+// ─── Navigation mobile ────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab-section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+  const section = document.getElementById('tab-' + name);
+  if (section) section.classList.add('active');
+  const btn = document.querySelector(`.nav-tab[data-tab="${name}"]`);
+  if (btn) btn.classList.add('active');
+  // Invalider la carte si on l'affiche à nouveau
+  if (name === 'map' && map) setTimeout(() => map.invalidateSize(), 50);
+}
+
+// ─── Choisir le bon layout selon la taille ───────────────────────────────────
+function applyLayout() {
+  const mobile = isMobile();
+  document.getElementById('main-desktop').style.display = mobile ? 'none' : '';
+  document.getElementById('main-mobile').style.display  = mobile ? 'block' : 'none';
+}
+applyLayout();
+window.addEventListener('resize', applyLayout);
+
+// ─── État ─────────────────────────────────────────────────────────────────────
+let simMode       = false;
+let simInterval   = null;
+let sseSource     = null;
+let audioCtx      = null;
+let mediaStream   = null;
+let processor     = null;
+let isRecording   = false;
+let audioQueue    = [];
+let isPlayingAudio= false;
+let map, mapDesktop, scooterMarker, scooterMarkerDesktop;
+let lastPos = [46.8492, -71.3434];
+
+// ─── Carte ────────────────────────────────────────────────────────────────────
+function makeIcon() {
+  return L.divIcon({
+    html: '<div style="width:14px;height:14px;border-radius:50%;background:#58a6ff;border:2px solid #fff;box-shadow:0 0 8px #58a6ff"></div>',
+    iconSize: [14,14], iconAnchor: [7,7]
+  });
+}
+
+function initMap() {
+  // Carte mobile
+  map = L.map('map', { zoomControl: false }).setView(lastPos, 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map);
+  scooterMarker = L.marker(lastPos, { icon: makeIcon() }).addTo(map);
+
+  // Carte desktop
+  mapDesktop = L.map('map-desktop', { zoomControl: true }).setView(lastPos, 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(mapDesktop);
+  scooterMarkerDesktop = L.marker(lastPos, { icon: makeIcon() }).addTo(mapDesktop);
+}
+
+function updateMapPos(lat, lon) {
+  lastPos = [lat, lon];
+  if (scooterMarker)        { scooterMarker.setLatLng(lastPos); map.panTo(lastPos); }
+  if (scooterMarkerDesktop) { scooterMarkerDesktop.setLatLng(lastPos); mapDesktop.panTo(lastPos); }
+}
+
+// ─── Jauges ───────────────────────────────────────────────────────────────────
+// desktop IDs → mobile IDs
+const GAUGE_CFG = {
+  speed:   { el:'arc-speed',   val:'val-speed',   elM:'arc-speed-m',   valM:'val-speed-m',   max:45,  decimals:0 },
+  voltage: { el:'arc-voltage', val:'val-voltage',  elM:'arc-voltage-m', valM:'val-voltage-m', max:60,  decimals:1 },
+  current: { el:'arc-current', val:'val-current',  elM:'arc-current-m', valM:'val-current-m', max:30,  decimals:1 },
+  temp:    { el:'arc-temp',    val:'val-temp',      elM:'arc-temp-m',    valM:'val-temp-m',    max:120, decimals:0 }
+};
+
+function updateGauge(key, value) {
+  const cfg = GAUGE_CFG[key]; if (!cfg) return;
+  const ratio  = Math.min(Math.max(value / cfg.max, 0), 1);
+  const offset = 113 * (1 - ratio);
+  const text   = value.toFixed(cfg.decimals);
+  // desktop
+  const arcD = document.getElementById(cfg.el); if (arcD) arcD.style.strokeDashoffset = offset;
+  const valD = document.getElementById(cfg.val); if (valD) valD.textContent = text;
+  // mobile
+  const arcM = document.getElementById(cfg.elM); if (arcM) arcM.style.strokeDashoffset = offset;
+  const valM = document.getElementById(cfg.valM); if (valM) valM.textContent = text;
+}
+
+function applyTelemetry(data) {
+  if (data.speed   !== undefined) updateGauge('speed',   data.speed);
+  if (data.voltage !== undefined) updateGauge('voltage', data.voltage);
+  if (data.current !== undefined) updateGauge('current', data.current);
+  if (data.temp    !== undefined) updateGauge('temp',    data.temp);
+  if (data.lat !== undefined && data.lon !== undefined) updateMapPos(data.lat, data.lon);
+}
+
+// ─── Journal vocal ────────────────────────────────────────────────────────────
+// On écrit dans les deux logs (desktop + mobile) qui partagent le même contenu via un seul <div id="voice-log">
+// Note : seul #voice-log (mobile) existe en double ; on utilise une fonction qui écrit dans les deux.
+
+let _currentAiEntry = null;
+
+function getLogEl() {
+  // Retourner le log visible selon le layout
+  return isMobile()
+    ? document.getElementById('voice-log')
+    : document.getElementById('voice-log-desktop');
+}
+
+function addLog(type, text) {
+  _currentAiEntry = null;
+  _appendLogEntry(type, text);
+}
+
+function appendAiDelta(delta) {
+  // Écrire dans les deux conteneurs pour garder la sync
+  ['voice-log', 'voice-log-desktop'].forEach(id => {
+    const el = document.getElementById(id); if (!el) return;
+    let entry = el._currentAiEntry;
+    if (!entry) {
+      const now  = new Date();
+      const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      entry = document.createElement('div');
+      entry.className = 'log-entry ai';
+      entry.innerHTML = `<span class="log-time">${time}</span><span class="ai-text"></span>`;
+      el.appendChild(entry);
+      el._currentAiEntry = entry;
+      while (el.children.length > 200) el.removeChild(el.firstChild);
+    }
+    entry.querySelector('.ai-text').textContent += delta;
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
+function _appendLogEntry(type, text) {
+  ['voice-log', 'voice-log-desktop'].forEach(id => {
+    const el = document.getElementById(id); if (!el) return;
+    el._currentAiEntry = null;
+    const div = document.createElement('div');
+    div.className = `log-entry ${type}`;
+    const now  = new Date();
+    const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    div.innerHTML = `<span class="log-time">${time}</span>${escapeHtml(text)}`;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+    while (el.children.length > 200) el.removeChild(el.firstChild);
+  });
+}
+
+function pad(n) { return String(n).padStart(2,'0'); }
+function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ─── Indicateurs ──────────────────────────────────────────────────────────────
+function setDot(id, state) {
+  const el = document.getElementById(id);
+  if (el) el.className = `dot${state ? ' '+state : ''}`;
+}
+
+// ─── SSE ──────────────────────────────────────────────────────────────────────
+function connectSSE() {
+  if (simMode) return;
+  if (sseSource) sseSource.close();
+  const tok = getToken();
+  sseSource = new EventSource(`/stream?token=${encodeURIComponent(tok || '')}`);
+  sseSource.onopen  = () => { setDot('dot-sse', 'on'); fetchStatus(); };
+  sseSource.onerror = () => { setDot('dot-sse', 'err'); setTimeout(connectSSE, 3000); };
+  sseSource.onmessage = (e) => {
+    try { handleSSEMessage(JSON.parse(e.data)); } catch (_) {}
+  };
+}
+
+function handleSSEMessage(msg) {
+  switch (msg.type) {
+    case 'transcript':  addLog('transcript', '🎤 ' + msg.text); break;
+    case 'ai_response': appendAiDelta(msg.text); break;
+    case 'audio':       enqueueAudio(msg.data); break;
+    case 'cmd':
+      addLog('cmd', `⚡ ${msg.action.toUpperCase()}${msg.intensity != null ? ' @ ' + Math.round(msg.intensity * 100) + '%' : ''}`);
+      break;
+    case 'telemetry': applyTelemetry(msg); break;
+  }
+}
+
+// ─── Lecture audio PCM16 ──────────────────────────────────────────────────────
+function enqueueAudio(base64) {
+  audioQueue.push(base64);
+  if (!isPlayingAudio) playNextAudio();
+}
+
+async function playNextAudio() {
+  if (!audioQueue.length) { isPlayingAudio = false; return; }
+  isPlayingAudio = true;
+  const b64 = audioQueue.shift();
+  try {
+    if (!audioCtx) audioCtx = new AudioContext({ sampleRate: 24000 });
+    const raw   = atob(b64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    const isWav = bytes[0] === 0x52 && bytes[1] === 0x49;
+    if (isWav) {
+      const decoded = await audioCtx.decodeAudioData(bytes.buffer.slice(0));
+      const src = audioCtx.createBufferSource();
+      src.buffer = decoded; src.connect(audioCtx.destination);
+      src.start(); src.onended = playNextAudio; return;
+    }
+    const samples = bytes.length / 2;
+    const buf = audioCtx.createBuffer(1, samples, 24000);
+    const ch  = buf.getChannelData(0);
+    const view = new DataView(bytes.buffer, bytes.byteOffset);
+    for (let i = 0; i < samples; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf; src.connect(audioCtx.destination);
+    src.start(); src.onended = playNextAudio;
+  } catch (err) { console.warn('[audio]', err); playNextAudio(); }
+}
+
+// ─── Statut proxy ─────────────────────────────────────────────────────────────
+function fetchStatus() {
+  authFetch('/status')
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(s => {
+      document.getElementById('mode-badge').textContent = s.mode.toUpperCase();
+      setDot('dot-ai', s.openai_connected || s.mode === 'local' ? 'on' : 'warn');
+      setDot('dot-ws', s.scooter_connected ? 'on' : 'err');
+    })
+    .catch(() => {});
+}
+
+// ─── Commandes manuelles ──────────────────────────────────────────────────────
+function getIntensity() {
+  const d = document.getElementById('intensity-slider');
+  const m = document.getElementById('intensity-slider-m');
+  const el = isMobile() ? m : d;
+  return el ? parseInt(el.value) / 100 : 0.5;
+}
+
+function syncSlider(src) {
+  const val = src.value + '%';
+  document.getElementById('intensity-val-m').textContent = val;
+  // sync desktop aussi si présent
+  const d = document.getElementById('intensity-slider');
+  if (d) { d.value = src.value; document.getElementById('intensity-val').textContent = val; }
+}
+
+function sendCmd(action) {
+  if (simMode) { addLog('cmd', `⚡ [SIM] ${action.toUpperCase()}`); return; }
+  authFetch('/cmd', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, intensity: getIntensity() })
+  }).catch(console.error);
+}
+
+// ─── Bouton PTT ───────────────────────────────────────────────────────────────
+// Mobile (#ptt-btn) + desktop (#ptt-btn-desktop) synchronisés
+const PTT_IDS = ['ptt-btn', 'ptt-btn-desktop'];
+
+function setVoiceState(recording) {
+  PTT_IDS.forEach(id => {
+    const btn = document.getElementById(id); if (!btn) return;
+    btn.textContent = recording ? '🔴' : '🎤';
+    btn.classList.toggle('active', recording);
+  });
+  const statEl = document.getElementById('voice-status');
+  if (statEl) statEl.textContent = recording ? 'ACTIF — appuyer pour arrêter' : 'INACTIF — appuyer pour parler';
+  const statD = document.getElementById('voice-status-desktop');
+  if (statD)  statD.textContent  = recording ? 'ACTIF — cliquer pour arrêter'  : 'INACTIF — cliquer pour parler';
+}
+
+async function startRecording() {
+  if (simMode) { simulateVoiceCmd(); return; }
+  try {
+    if (!audioCtx) audioCtx = new AudioContext({ sampleRate: 16000 });
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
+    const source = audioCtx.createMediaStreamSource(mediaStream);
+    processor = audioCtx.createScriptProcessor(AUDIO_CHUNK, 1, 1);
+    processor.onaudioprocess = (e) => {
+      if (!isRecording) return;
+      sendAudioChunk(float32ToPCM16(e.inputBuffer.getChannelData(0)));
+    };
+    source.connect(processor);
+    processor.connect(audioCtx.destination);
+    isRecording = true;
+    setVoiceState(true);
+    addLog('system', 'Microphone actif');
+  } catch (err) {
+    console.error('[mic]', err);
+    addLog('system', 'Microphone inaccessible : ' + err.message);
+  }
+}
+
+function stopRecording() {
+  if (!isRecording) return;
+  isRecording = false;
+  if (processor)   { processor.disconnect(); processor = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+  setVoiceState(false);
+  addLog('system', 'Microphone coupé');
+}
+
+function toggleRecording() {
+  if (isRecording) stopRecording(); else startRecording();
+}
+
+function float32ToPCM16(input) {
+  const buf = new ArrayBuffer(input.length * 2);
+  const view = new DataView(buf);
+  for (let i = 0; i < input.length; i++) {
+    const s = Math.max(-1, Math.min(1, input[i]));
+    view.setInt16(i * 2, s < 0 ? s * 32768 : s * 32767, true);
+  }
+  return new Uint8Array(buf);
+}
+
+function sendAudioChunk(pcm16) {
+  authFetch('/audio', {
+    method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: pcm16
+  }).catch(console.error);
+}
+
+// Attacher les événements aux deux boutons PTT
+PTT_IDS.forEach(id => {
+  const btn = document.getElementById(id); if (!btn) return;
+  btn.addEventListener('click',    (e) => { e.preventDefault(); toggleRecording(); });
+  btn.addEventListener('touchend', (e) => { e.preventDefault(); toggleRecording(); }, { passive: false });
+});
+
+// Style desktop du bouton PTT (réutilise la classe .ptt-btn-inner)
+(function addDesktopPttStyle() {
+  const s = document.createElement('style');
+  s.textContent = `
+    .ptt-btn-inner {
+      width:70px;height:70px;border-radius:50%;
+      border:2px solid var(--accent);background:transparent;color:var(--accent);
+      font-size:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+      user-select:none;-webkit-user-select:none;transition:all 0.15s;
+      -webkit-tap-highlight-color:transparent;
+    }
+    .ptt-btn-inner.active {
+      border-color:var(--red);color:var(--red);
+      background:rgba(248,81,73,0.12);
+      box-shadow:0 0 20px rgba(248,81,73,0.35);
+      animation:pulse 1s infinite;
+    }
+    .voice-status-inner { font-size:11px;color:var(--muted);letter-spacing:0.04em;text-align:center; }
+  `;
+  document.head.appendChild(s);
+})();
+
+// ─── Mode simulation ──────────────────────────────────────────────────────────
+function toggleSim() {
+  simMode = !simMode;
+  document.getElementById('sim-btn').classList.toggle('active', simMode);
+  if (simMode) {
+    if (sseSource) { sseSource.close(); sseSource = null; }
+    setDot('dot-sse','warn'); setDot('dot-ws','warn'); setDot('dot-ai','warn');
+    document.getElementById('mode-badge').textContent = 'SIM';
+    addLog('system', 'Mode simulation activé');
+    startSimTelemetry();
+  } else {
+    stopSimTelemetry();
+    addLog('system', 'Mode simulation désactivé');
+    connectSSE();
+  }
+}
+
+let simLat = 46.8492, simLon = -71.3434, simAngle = 0;
+
+function startSimTelemetry() {
+  stopSimTelemetry();
+  simInterval = setInterval(() => {
+    const t = Date.now() / 1000;
+    simAngle += 0.01; simLat += Math.cos(simAngle) * 0.0001; simLon += Math.sin(simAngle) * 0.0001;
+    applyTelemetry({
+      speed:   15 + 10 * Math.sin(t * 0.3),
+      voltage: 42 + 5  * Math.sin(t * 0.1),
+      current: 8  + 6  * Math.abs(Math.sin(t * 0.4)),
+      temp:    45 + 10 * Math.sin(t * 0.05),
+      lat: simLat, lon: simLon
+    });
+  }, 500);
+}
+
+function stopSimTelemetry() {
+  if (simInterval) { clearInterval(simInterval); simInterval = null; }
+}
+
+const SIM_RESPONSES = [
+  { transcript:'Avance à vitesse modérée', ai:'Bien reçu, j\'accélère doucement.', cmd:{action:'forward',intensity:0.4} },
+  { transcript:'Freine maintenant',        ai:'Freinage en cours.',                cmd:{action:'brake',  intensity:0.8} },
+  { transcript:'Stop',                     ai:'Arrêt complet.',                    cmd:{action:'stop'} }
+];
+let simRespIdx = 0;
+
+function simulateVoiceCmd() {
+  const r = SIM_RESPONSES[simRespIdx++ % SIM_RESPONSES.length];
+  setVoiceState(true);
+  setTimeout(() => {
+    addLog('transcript', '🎤 ' + r.transcript);
+    setTimeout(() => {
+      appendAiDelta('🤖 ' + r.ai);
+      addLog('cmd', `⚡ [SIM] ${r.cmd.action.toUpperCase()}${r.cmd.intensity != null ? ' @ '+Math.round(r.cmd.intensity*100)+'%' : ''}`);
+      setVoiceState(false);
+    }, 800);
+  }, 1200);
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+function initApp() {
+  initMap();
+  connectSSE();
+  setInterval(fetchStatus, 10000);
+  addLog('system', 'Interface initialisée');
+}
+</script>
+</body>
+</html>

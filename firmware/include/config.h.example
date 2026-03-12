@@ -1,0 +1,48 @@
+#pragma once
+
+// ── WiFi ──────────────────────────────────────────────────────────────────────
+// Choisir le mode selon le réseau disponible :
+//   WIFI_ENTERPRISE=false  → WPA2 personnel (maison / hotspot)
+//   WIFI_ENTERPRISE=true   → WPA2-Enterprise EAP-PEAP/MSCHAPv2 (cégep / bureau)
+#define WIFI_ENTERPRISE  false
+
+#define WIFI_SSID        "MonReseau"
+#define WIFI_PASSWORD    "monmotdepasse"    // utilisé seulement si WIFI_ENTERPRISE=false
+
+// Champs EAP — utilisés seulement si WIFI_ENTERPRISE=true
+#define EAP_IDENTITY     "anonymous"        // outer identity (peut être vide)
+#define EAP_USERNAME     "mon_identifiant"
+#define EAP_PASSWORD     "mon_mot_de_passe"
+
+// ── Proxy ─────────────────────────────────────────────────────────────────────
+// Connexion HTTPS via tunnel Cloudflare (port 443)
+#define PROXY_HOST       "trottinnette.ve2fpd.com"
+#define PROXY_PORT       443
+
+// ── WebSocket serveur (le proxy se connecte ici pour envoyer les commandes) ───
+// Définir SCOOTER_WS=ws://trottinette.local:8080 dans le .env du proxy
+#define WS_SERVER_PORT   8080
+
+// ── Bouton toggle vocal ───────────────────────────────────────────────────────
+// GPIO0 = bouton BOOT sur la plupart des boards ESP32 DevKit
+#define VOICE_BTN_PIN    34
+
+// ── Microphone I2S MEMS (Adafruit I2S MEMS Breakout – SPH0645 / ICS-43434) ──
+#define MIC_BCLK_PIN     27     // BCLK
+#define MIC_LRCLK_PIN    26     // LRCLK / WS
+#define MIC_DATA_PIN     33     // DOUT du micro → DIN de l'ESP32
+
+// ── Haut-parleur (Adafruit STEMMA Speaker via DAC natif) ─────────────────────
+#define SPK_PIN          25     // GPIO25 = DAC1
+
+// ── Paramètres audio ──────────────────────────────────────────────────────────
+#define MIC_SAMPLE_RATE     16000   // capture micro
+#define SPK_SAMPLE_RATE     24000   // lecture haut-parleur (OpenAI output = 24 kHz)
+#define MIC_CHUNK_SAMPLES   512     // samples capturés avant envoi HTTP
+                                    // = 32 ms à 16 kHz
+
+// ── Télémétrie ────────────────────────────────────────────────────────────────
+// true  : données simulées (développement sans capteurs)
+// false : capteurs réels (implémenter readRealTelemetry() dans main.cpp)
+#define FAKE_TELEMETRY   true
+#define TELEMETRY_MS     500        // intervalle d'envoi (ms)

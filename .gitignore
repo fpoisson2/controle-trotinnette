@@ -1,0 +1,10 @@
+# Secrets
+.env
+firmware/include/config.h
+
+# Node
+node_modules/
+
+# PlatformIO
+firmware/.pio/
+firmware/.vscode/

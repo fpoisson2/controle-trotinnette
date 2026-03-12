@@ -1,0 +1,574 @@
+'use strict';
+
+require('dotenv').config();
+
+const express  = require('express');
+const http     = require('http');
+const WebSocket = require('ws');
+const path     = require('path');
+const bcrypt   = require('bcryptjs');
+const jwt      = require('jsonwebtoken');
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+const AUTH_USERNAME = process.env.AUTH_USERNAME || 'admin';
+const AUTH_PASSWORD_HASH = process.env.AUTH_PASSWORD_HASH || '';
+const JWT_SECRET  = process.env.JWT_SECRET || '';
+const JWT_EXPIRY  = '12h';
+
+if (!AUTH_PASSWORD_HASH) console.error('[auth] ATTENTION : AUTH_PASSWORD_HASH non défini dans .env');
+if (!JWT_SECRET)         console.error('[auth] ATTENTION : JWT_SECRET non défini dans .env');
+
+// Tentatives de login par IP (rate limiting)
+const loginAttempts = new Map(); // ip → { count, lockedUntil }
+const MAX_ATTEMPTS  = 5;
+const LOCKOUT_MS    = 15 * 60 * 1000; // 15 minutes
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const rec = loginAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+  if (rec.lockedUntil > now) {
+    const remaining = Math.ceil((rec.lockedUntil - now) / 60000);
+    return { blocked: true, remaining };
+  }
+  return { blocked: false, rec };
+}
+
+function recordFailedAttempt(ip) {
+  const rec = loginAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+  rec.count++;
+  if (rec.count >= MAX_ATTEMPTS) {
+    rec.lockedUntil = Date.now() + LOCKOUT_MS;
+    rec.count = 0;
+  }
+  loginAttempts.set(ip, rec);
+}
+
+function clearAttempts(ip) { loginAttempts.delete(ip); }
+
+// Middleware JWT — accepte le token en header ou en query param (pour EventSource)
+function requireAuth(req, res, next) {
+  const header = req.headers.authorization;
+  const token  = (header?.startsWith('Bearer ') ? header.slice(7) : null)
+               ?? req.query.token;
+  if (!token) return res.status(401).json({ error: 'Non autorisé' });
+  try {
+    jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: 'Token invalide ou expiré' });
+  }
+}
+
+// ─── Config ──────────────────────────────────────────────────────────────────
+const USE_LOCAL_AI   = process.env.USE_LOCAL_AI === 'true';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const WHISPER_URL    = process.env.WHISPER_URL    || 'http://localhost:10300';
+const OLLAMA_URL     = process.env.OLLAMA_URL     || 'http://localhost:11434';
+const OLLAMA_MODEL   = process.env.OLLAMA_MODEL   || 'qwen3:8b';
+const PIPER_URL      = process.env.PIPER_URL      || 'http://localhost:5000';
+const SCOOTER_WS     = process.env.SCOOTER_WS     || 'ws://localhost:8080';
+const PORT           = parseInt(process.env.PROXY_PORT || '3000', 10);
+
+// ─── État global ─────────────────────────────────────────────────────────────
+let sseClients        = [];        // res objects des clients SSE (navigateur)
+let esp32Ws           = null;      // WebSocket ESP32 (/ws-esp32)
+let openaiWs          = null;      // WebSocket vers OpenAI Realtime
+let scooterWs         = null;      // WebSocket vers la trottinette
+let openaiConnected   = false;
+let scooterConnected  = false;
+let lastTelemetry     = { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0 };
+
+// ─── Broadcast vers navigateurs (SSE) + ESP32 (WS) ───────────────────────────
+function broadcastSSE(obj) {
+  const payload = `data: ${JSON.stringify(obj)}\n\n`;
+  for (const client of sseClients) {
+    try { client.write(payload); } catch (_) { /* client déconnecté */ }
+  }
+  // Envoyer aussi à l'ESP32 via WebSocket
+  if (esp32Ws && esp32Ws.readyState === WebSocket.OPEN) {
+    try { esp32Ws.send(JSON.stringify(obj)); } catch (_) {}
+  }
+}
+
+// ─── Outils IA (schémas partagés cloud/local) ─────────────────────────────────
+const TOOL_SCHEMA = {
+  type: 'function',
+  name: 'commande_trottinette',
+  description: 'Envoie une commande de contrôle à la trottinette',
+  parameters: {
+    type: 'object',
+    properties: {
+      action:    { type: 'string', enum: ['forward', 'brake', 'stop'] },
+      intensity: { type: 'number', minimum: 0, maximum: 1 }
+    },
+    required: ['action']
+  }
+};
+
+const TELEMETRY_TOOL_SCHEMA = {
+  type: 'function',
+  name: 'lire_telemetrie',
+  description:
+    'Retourne les données de télémétrie actuelles de la trottinette : ' +
+    'vitesse (km/h), tension batterie (V), courant (A), température (°C), position GPS (lat/lon)',
+  parameters: {
+    type: 'object',
+    properties: {},
+    required: []
+  }
+};
+
+// ─── Backend trottinette ─────────────────────────────────────────────────────
+function connectScooter() {
+  console.log(`[scooter] connexion vers ${SCOOTER_WS}`);
+  scooterWs = new WebSocket(SCOOTER_WS);
+
+  scooterWs.on('open', () => {
+    scooterConnected = true;
+    console.log('[scooter] connecté');
+  });
+
+  scooterWs.on('message', (data) => {
+    // Télémétrie reçue de la trottinette → stockée + relayée aux clients SSE
+    try {
+      const msg = JSON.parse(data.toString());
+      lastTelemetry = { ...lastTelemetry, ...msg };
+      broadcastSSE({ type: 'telemetry', ...msg });
+    } catch (_) { /* ignore */ }
+  });
+
+  scooterWs.on('close', () => {
+    scooterConnected = false;
+    console.log('[scooter] déconnecté – reconnexion dans 3 s');
+    setTimeout(connectScooter, 3000);
+  });
+
+  scooterWs.on('error', (err) => {
+    console.error('[scooter] erreur :', err.message);
+    scooterWs.close();
+  });
+}
+
+function sendScooterCmd(action, intensity) {
+  const cmd = { type: 'cmd', action };
+  if (intensity !== undefined) cmd.intensity = intensity;
+
+  // Diffusion SSE aux clients web
+  broadcastSSE({ type: 'cmd', action, intensity: intensity ?? null });
+
+  if (scooterWs && scooterWs.readyState === WebSocket.OPEN) {
+    scooterWs.send(JSON.stringify(cmd));
+  } else {
+    console.warn('[scooter] impossible d\'envoyer la commande : non connecté');
+  }
+}
+
+// ─── Mode cloud : OpenAI Realtime ─────────────────────────────────────────────
+function connectOpenAI() {
+  if (!OPENAI_API_KEY) {
+    console.warn('[openai] OPENAI_API_KEY manquant – mode cloud désactivé');
+    return;
+  }
+
+  console.log('[openai] connexion WebSocket Realtime...');
+  openaiWs = new WebSocket(
+    'wss://api.openai.com/v1/realtime?model=gpt-realtime-1.5',
+    {
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        'OpenAI-Beta': 'realtime=v1'
+      }
+    }
+  );
+
+  openaiWs.on('open', () => {
+    openaiConnected = true;
+    console.log('[openai] connecté – envoi session.update');
+
+    openaiWs.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        modalities: ['text', 'audio'],
+        instructions:
+          'Tu es l\'assistant vocal d\'une trottinette électrique intelligente. ' +
+          'Tu communiques exclusivement en français, de façon concise et dynamique. ' +
+          'Tu peux contrôler la trottinette (avancer, freiner, arrêter) via l\'outil commande_trottinette, ' +
+          'et consulter sa télémétrie en temps réel (vitesse, tension batterie, courant, température, GPS) ' +
+          'via l\'outil lire_telemetrie. ' +
+          'Utilise toujours les outils plutôt que d\'inventer des valeurs. ' +
+          'Réponds en une ou deux phrases maximum.',
+        voice: 'alloy',
+        input_audio_format: 'pcm16',
+        output_audio_format: 'pcm16',
+        input_audio_transcription: null,
+        turn_detection: {
+          type: 'semantic_vad',
+          create_response: true,
+          interrupt_response: true
+        },
+        tools: [TOOL_SCHEMA, TELEMETRY_TOOL_SCHEMA],
+        tool_choice: 'auto'
+      }
+    }));
+  });
+
+  openaiWs.on('message', (raw) => {
+    let event;
+    try { event = JSON.parse(raw.toString()); } catch (_) { return; }
+
+    switch (event.type) {
+      // Transcription de l'audio entrant (journal navigateur uniquement)
+      case 'conversation.item.input_audio_transcription.completed': {
+        const payload = `data: ${JSON.stringify({ type: 'transcript', text: event.transcript })}\n\n`;
+        for (const c of sseClients) { try { c.write(payload); } catch (_) {} }
+        break;
+      }
+
+      // Delta audio de la réponse (GA et beta) — envoyé en morceaux de 4096 chars
+      case 'response.output_audio.delta':
+      case 'response.audio.delta': {
+        const b64 = event.delta ?? '';
+        const CHUNK = 4096;
+        for (let i = 0; i < b64.length; i += CHUNK) {
+          broadcastSSE({ type: 'audio', data: b64.slice(i, i + CHUNK) });
+        }
+        break;
+      }
+
+      // Delta texte de la transcription de sortie (navigateur uniquement)
+      case 'response.output_audio_transcript.delta':
+      case 'response.audio_transcript.delta': {
+        const payload = `data: ${JSON.stringify({ type: 'ai_response', text: event.delta })}\n\n`;
+        for (const c of sseClients) { try { c.write(payload); } catch (_) {} }
+        break;
+      }
+        break;
+
+      // Appel d'outil
+      case 'response.function_call_arguments.done': {
+        if (event.name === 'commande_trottinette') {
+          try {
+            const args = JSON.parse(event.arguments);
+            sendScooterCmd(args.action, args.intensity);
+
+            openaiWs.send(JSON.stringify({
+              type: 'conversation.item.create',
+              item: {
+                type: 'function_call_output',
+                call_id: event.call_id,
+                output: JSON.stringify({ success: true })
+              }
+            }));
+            openaiWs.send(JSON.stringify({ type: 'response.create' }));
+          } catch (err) {
+            console.error('[openai] erreur parsing tool call :', err.message);
+          }
+        } else if (event.name === 'lire_telemetrie') {
+          console.log('[openai] lire_telemetrie :', JSON.stringify(lastTelemetry));
+          openaiWs.send(JSON.stringify({
+            type: 'conversation.item.create',
+            item: {
+              type: 'function_call_output',
+              call_id: event.call_id,
+              output: JSON.stringify(lastTelemetry)
+            }
+          }));
+          openaiWs.send(JSON.stringify({ type: 'response.create' }));
+        }
+        break;
+      }
+
+      case 'error':
+        console.error('[openai] erreur :', event.error?.message);
+        break;
+
+      default:
+        // Log des événements non gérés pour diagnostic
+        if (!event.type?.startsWith('rate_limits') &&
+            !event.type?.startsWith('session') &&
+            !event.type?.startsWith('input_audio_buffer') &&
+            !event.type?.startsWith('conversation.item.created') &&
+            !event.type?.startsWith('response.created') &&
+            !event.type?.startsWith('response.output_item') &&
+            !event.type?.startsWith('response.content_part') &&
+            !event.type?.startsWith('response.output_text') &&
+            !event.type?.startsWith('response.done') &&
+            !event.type?.startsWith('response.output_audio.done') &&
+            !event.type?.startsWith('response.output_audio_transcript.done')) {
+          console.log('[openai] event non géré :', event.type);
+        }
+    }
+  });
+
+  openaiWs.on('close', () => {
+    openaiConnected = false;
+    console.log('[openai] déconnecté – reconnexion dans 5 s');
+    setTimeout(connectOpenAI, 5000);
+  });
+
+  openaiWs.on('error', (err) => {
+    console.error('[openai] erreur WS :', err.message);
+    openaiWs.close();
+  });
+}
+
+// ─── Mode local : pipeline Whisper → Ollama → Piper ──────────────────────────
+async function processLocalAudio(audioBuffer) {
+  // ── Étape 1 : STT avec faster-whisper ──
+  let transcript = '';
+  try {
+    const { default: fetch } = await import('node-fetch');
+    const sttRes = await fetch(`${WHISPER_URL}/asr`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: audioBuffer
+    });
+    if (!sttRes.ok) throw new Error(`STT HTTP ${sttRes.status}`);
+    const sttJson = await sttRes.json();
+    transcript = sttJson.text || '';
+    broadcastSSE({ type: 'transcript', text: transcript });
+    console.log('[whisper] transcription :', transcript);
+  } catch (err) {
+    console.error('[whisper] erreur :', err.message);
+    return;
+  }
+
+  if (!transcript.trim()) return;
+
+  // ── Étape 2 : LLM avec Ollama ──
+  let responseText = '';
+  let toolCall = null;
+  try {
+    const { default: fetch } = await import('node-fetch');
+    const llmRes = await fetch(`${OLLAMA_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Tu es le cerveau d\'une trottinette électrique intelligente. ' +
+              'Tu reçois des commandes vocales en français. ' +
+              'Quand l\'utilisateur te donne une commande de mouvement, ' +
+              'tu réponds de façon courte et tu appelles l\'outil approprié.'
+          },
+          { role: 'user', content: transcript }
+        ],
+        tools: [TOOL_SCHEMA],
+        stream: true
+      })
+    });
+
+    if (!llmRes.ok) throw new Error(`LLM HTTP ${llmRes.status}`);
+
+    // Lecture du stream NDJSON
+    const reader = llmRes.body;
+    let buffer = '';
+    for await (const chunk of reader) {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // conserver la ligne incomplète
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const part = JSON.parse(line);
+          const msg = part.message;
+          if (!msg) continue;
+
+          // Texte de réponse
+          if (msg.content) {
+            responseText += msg.content;
+            broadcastSSE({ type: 'ai_response', text: msg.content });
+          }
+
+          // Appel d'outil
+          if (msg.tool_calls && msg.tool_calls.length > 0) {
+            for (const tc of msg.tool_calls) {
+              if (tc.function?.name === 'commande_trottinette') {
+                toolCall = tc.function.arguments;
+              }
+            }
+          }
+        } catch (_) { /* ligne non JSON */ }
+      }
+    }
+  } catch (err) {
+    console.error('[ollama] erreur :', err.message);
+    return;
+  }
+
+  // Exécuter l'outil si demandé
+  if (toolCall) {
+    try {
+      const args = typeof toolCall === 'string' ? JSON.parse(toolCall) : toolCall;
+      sendScooterCmd(args.action, args.intensity);
+    } catch (err) {
+      console.error('[ollama] erreur parsing tool :', err.message);
+    }
+  }
+
+  // ── Étape 3 : TTS avec Piper ──
+  if (!responseText.trim()) return;
+  try {
+    const { default: fetch } = await import('node-fetch');
+    const ttsRes = await fetch(`${PIPER_URL}/api/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: responseText, voice: 'fr_FR-siwis-medium' })
+    });
+    if (!ttsRes.ok) throw new Error(`TTS HTTP ${ttsRes.status}`);
+    const audioData = await ttsRes.buffer();
+    broadcastSSE({ type: 'audio', data: audioData.toString('base64') });
+  } catch (err) {
+    console.error('[piper] erreur :', err.message);
+  }
+}
+
+// ─── Express app ──────────────────────────────────────────────────────────────
+const app = express();
+app.use(express.json());
+app.use(express.raw({ type: 'application/octet-stream', limit: '10mb' }));
+
+// ── Routes publiques ──
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// ── POST /login ──
+app.post('/login', async (req, res) => {
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
+  const { username, password } = req.body || {};
+
+  const { blocked, remaining, rec } = checkRateLimit(ip);
+  if (blocked) {
+    return res.status(429).json({ error: `Trop de tentatives. Réessayer dans ${remaining} min.` });
+  }
+
+  const validUser = username === AUTH_USERNAME;
+  const validPass = AUTH_PASSWORD_HASH
+    ? await bcrypt.compare(password ?? '', AUTH_PASSWORD_HASH)
+    : false;
+
+  if (!validUser || !validPass) {
+    recordFailedAttempt(ip);
+    const attemptsLeft = MAX_ATTEMPTS - (rec.count + 1);
+    return res.status(401).json({
+      error: attemptsLeft > 0
+        ? `Identifiants incorrects (${attemptsLeft} tentative${attemptsLeft > 1 ? 's' : ''} restante${attemptsLeft > 1 ? 's' : ''})`
+        : 'Compte verrouillé 15 minutes'
+    });
+  }
+
+  clearAttempts(ip);
+  const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+  res.json({ token });
+});
+
+// ── GET /stream (SSE) — route publique (ESP32 n'a pas de JWT) ──
+app.get('/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.flushHeaders();
+
+  // Ping toutes les 15 s pour maintenir la connexion (Cloudflare coupe à ~100 s)
+  const ping = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch (_) { clearInterval(ping); }
+  }, 15000);
+
+  sseClients.push(res);
+  console.log(`[sse] client connecté (total: ${sseClients.length})`);
+
+  req.on('close', () => {
+    clearInterval(ping);
+    sseClients = sseClients.filter(c => c !== res);
+    console.log(`[sse] client déconnecté (total: ${sseClients.length})`);
+  });
+});
+
+// ── POST /audio — gardé pour compatibilité (ESP32 utilise maintenant /ws-esp32)
+app.post('/audio', async (req, res) => {
+  const chunk = req.body;
+  if (!USE_LOCAL_AI && openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+    openaiWs.send(JSON.stringify({
+      type: 'input_audio_buffer.append',
+      audio: chunk.toString('base64')
+    }));
+  }
+  res.sendStatus(200);
+});
+
+// ── Toutes les routes suivantes requièrent un JWT valide ──
+app.use(requireAuth);
+
+// ── POST /audio/commit (utilisé en mode local uniquement — semantic_vad gère les tours en mode cloud) ──
+app.post('/audio/commit', (req, res) => {
+  if (USE_LOCAL_AI && openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+    openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+    openaiWs.send(JSON.stringify({ type: 'response.create' }));
+  }
+  res.sendStatus(200);
+});
+
+// ── POST /cmd ──
+app.post('/cmd', (req, res) => {
+  const { action, intensity } = req.body;
+  if (!action) return res.status(400).json({ error: 'action requise' });
+  sendScooterCmd(action, intensity);
+  res.json({ ok: true });
+});
+
+// ── GET /status ──
+app.get('/status', (req, res) => {
+  const esp32Connected = esp32Ws && esp32Ws.readyState === WebSocket.OPEN;
+  res.json({
+    mode: USE_LOCAL_AI ? 'local' : 'cloud',
+    openai_connected: USE_LOCAL_AI ? null : openaiConnected,
+    scooter_connected: scooterConnected || esp32Connected
+  });
+});
+
+// ─── WebSocket ESP32 (/ws-esp32) — audio entrant + events sortants ────────────
+const esp32Wss = new WebSocket.Server({ noServer: true });
+
+esp32Wss.on('connection', (ws) => {
+  console.log('[esp32-ws] ESP32 connecté');
+  esp32Ws = ws;
+
+  ws.on('message', (data, isBinary) => {
+    if (isBinary && openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+      openaiWs.send(JSON.stringify({
+        type: 'input_audio_buffer.append',
+        audio: Buffer.from(data).toString('base64')
+      }));
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('[esp32-ws] ESP32 déconnecté');
+    if (esp32Ws === ws) esp32Ws = null;
+  });
+});
+
+// ─── Démarrage ────────────────────────────────────────────────────────────────
+const server = http.createServer(app);
+
+server.on('upgrade', (req, socket, head) => {
+  if (req.url === '/ws-esp32') {
+    esp32Wss.handleUpgrade(req, socket, head, (ws) => {
+      esp32Wss.emit('connection', ws, req);
+    });
+  }
+});
+
+server.listen(PORT, () => {
+  console.log(`[proxy] démarré sur http://0.0.0.0:${PORT}`);
+  console.log(`[proxy] mode IA : ${USE_LOCAL_AI ? 'local' : 'cloud'}`);
+});
+
+connectScooter();
+if (!USE_LOCAL_AI) connectOpenAI();

@@ -1,0 +1,26 @@
+services:
+
+  proxy:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    networks:
+      - trottinette_net
+    # Port exposé uniquement pour debug local — commenter en production
+    # ports:
+    #   - "3000:3000"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      - proxy
+    networks:
+      - trottinette_net
+
+networks:
+  trottinette_net:
+    driver: bridge
