@@ -4,6 +4,7 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <ESPmDNS.h>
+#include <ArduinoOTA.h>
 #include "esp_wpa2.h"
 #include "audio.h"
 #include "config.h"
@@ -29,6 +30,10 @@ static float    lastIntensity   = 0.0f;
 static uint16_t currentThrottle = FTESC_THROTTLE_NEUTRAL;
 static uint8_t  currentGear     = FTESC_GEAR_HIGH;
 static bool     brakeLightOn    = false;
+
+// Calibration ADC au repos (mesurée au démarrage)
+static int throttleAdcMin = THROTTLE_ADC_MIN;
+static int brakeAdcMin    = BRAKE_ADC_MIN;
 
 // Buffer télémétrie partagé Core0→Core1 (wsProxy uniquement sur Core1)
 static volatile bool telemetryPending = false;
@@ -74,6 +79,24 @@ static void connectWiFi() {
         MDNS.addService("ws", "tcp", WS_SERVER_PORT);
         Serial.println("[mdns] trottinette.local");
     }
+
+    // OTA
+    ArduinoOTA.setHostname(OTA_HOSTNAME);
+    ArduinoOTA.setPassword(OTA_PASSWORD);
+    ArduinoOTA.onStart([]() {
+        Serial.println("[ota] démarrage mise à jour...");
+    });
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\n[ota] terminé — redémarrage");
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("[ota] %u%%\r", progress * 100 / total);
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("[ota] erreur %u\n", error);
+    });
+    ArduinoOTA.begin();
+    Serial.printf("[ota] prêt — hostname: %s\n", OTA_HOSTNAME);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -295,6 +318,10 @@ void setup() {
 
     pinMode(VOICE_BTN_PIN, INPUT_PULLUP);
 
+    // Pull-down sur le throttle : GPIO32 supporte les résistances internes
+    // Évite que la pin flotte si le capteur est déconnecté
+    pinMode(THROTTLE_ADC_PIN, INPUT_PULLDOWN);
+
     // Boutons manette gear (actif LOW)
     pinMode(GEAR_R_PIN, INPUT_PULLUP);
     pinMode(GEAR_L_PIN, INPUT_PULLUP);
@@ -342,25 +369,34 @@ void setup() {
         delay(30);
     }
 
+    // Auto-calibration ADC : mesure la valeur au repos sur 100 échantillons (1 s)
+    Serial.println("[cal] calibration ADC au repos...");
+    long tSum = 0, bSum = 0;
+    for (int i = 0; i < 100; i++) {
+        tSum += analogRead(THROTTLE_ADC_PIN);
+        bSum += analogRead(BRAKE_ADC_PIN);
+        delay(10);
+    }
+    throttleAdcMin = (int)(tSum / 100);
+    brakeAdcMin    = (int)(bSum / 100);
+    Serial.printf("[cal] thr_min=%d brk_min=%d\n", throttleAdcMin, brakeAdcMin);
+
     Serial.println("[setup] prêt — appuyer sur le bouton pour activer le micro");
 }
 
 void loop() {
+    ArduinoOTA.handle();
     wsServer.loop();
 
 
     // ── Gear-R = push-to-talk : tenir = micro actif, relâcher = inactif ────────
-    bool gearRNow = digitalRead(GEAR_R_PIN);
-    bool voiceFromGear = (gearRNow == LOW);
-    voiceActive = voiceFromGear;
+    voiceActive = (digitalRead(GEAR_R_PIN) == LOW);
 
-    // ── Gear-L / M / H : sélection de vitesse (D6 cmd 02H) ──────────────────
+    // ── Gear-L / H : sélection de vitesse (M supprimé — GPIO22 = PTT) ────────
     static uint8_t prevGear = FTESC_GEAR_HIGH;
     bool gH = digitalRead(GEAR_H_PIN) == LOW;
-    bool gM = digitalRead(GEAR_M_PIN) == LOW;
     bool gL = digitalRead(GEAR_L_PIN) == LOW;
     if (gH) currentGear = FTESC_GEAR_HIGH;
-    else if (gM) currentGear = FTESC_GEAR_MEDIUM;
     else if (gL) currentGear = FTESC_GEAR_LOW;
     if (currentGear != prevGear) {
         Serial.printf("[gear] L=%d M=%d H=%d → gear=%d\n", gL, gM, gH, currentGear);
@@ -371,10 +407,10 @@ void loop() {
     static uint32_t lastAdcLog = 0;
     if (millis() - lastAdcLog > 2000) {
         lastAdcLog = millis();
-        Serial.printf("[adc] thr=%d brk=%d gR=%d gL=%d gM=%d gH=%d\n",
+        Serial.printf("[adc] thr=%d brk=%d ptt=%d gL=%d gH=%d\n",
             analogRead(THROTTLE_ADC_PIN), analogRead(BRAKE_ADC_PIN),
             !digitalRead(GEAR_R_PIN), !digitalRead(GEAR_L_PIN),
-            !digitalRead(GEAR_M_PIN), !digitalRead(GEAR_H_PIN));
+            !digitalRead(GEAR_H_PIN));
     }
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -406,8 +442,10 @@ void loop() {
                 return s[2]; // médiane
             };
             // IIR sur les lectures médianes (α=0.5 : rapide mais lisse les résidus)
-            static float thrSmooth = THROTTLE_ADC_MIN;
-            static float brkSmooth = BRAKE_ADC_MIN;
+            static float thrSmooth = -1;
+            static float brkSmooth = -1;
+            if (thrSmooth < 0) thrSmooth = throttleAdcMin;
+            if (brkSmooth < 0) brkSmooth = brakeAdcMin;
             thrSmooth = 0.5f * adcMedian5(THROTTLE_ADC_PIN) + 0.5f * thrSmooth;
             brkSmooth = 0.5f * adcMedian5(BRAKE_ADC_PIN)    + 0.5f * brkSmooth;
             int throttleVal = (int)thrSmooth;
@@ -415,28 +453,28 @@ void loop() {
 
             // Hystérésis throttle : ON > MIN+100, OFF < MIN+50 → empêche vmvmvm
             static bool throttleOn = false;
-            if (!throttleOn && throttleVal > THROTTLE_ADC_MIN + THROTTLE_DEADZONE)
+            if (!throttleOn && throttleVal > throttleAdcMin + THROTTLE_DEADZONE)
                 throttleOn = true;
-            else if (throttleOn && throttleVal < THROTTLE_ADC_MIN + THROTTLE_DEADZONE / 2)
+            else if (throttleOn && throttleVal < throttleAdcMin + THROTTLE_DEADZONE / 2)
                 throttleOn = false;
 
             // Hystérésis frein : ON > MIN+100, OFF < MIN+50
             static bool brakeOn = false;
-            if (!brakeOn && brakeVal > BRAKE_ADC_MIN + BRAKE_DEADZONE)
+            if (!brakeOn && brakeVal > brakeAdcMin + BRAKE_DEADZONE)
                 brakeOn = true;
-            else if (brakeOn && brakeVal < BRAKE_ADC_MIN + BRAKE_DEADZONE / 2)
+            else if (brakeOn && brakeVal < brakeAdcMin + BRAKE_DEADZONE / 2)
                 brakeOn = false;
 
             uint16_t targetThrottle;
             if (brakeOn) {
-                int mapped = map(brakeVal, BRAKE_ADC_MIN, BRAKE_ADC_MAX,
+                int mapped = map(brakeVal, brakeAdcMin, BRAKE_ADC_MAX,
                                  FTESC_THROTTLE_NEUTRAL, FTESC_THROTTLE_MIN);
                 targetThrottle = (uint16_t)constrain(mapped,
                                  FTESC_THROTTLE_MIN, FTESC_THROTTLE_NEUTRAL);
                 brakeLightOn = true;
             } else if (throttleOn) {
-                float n = (float)(throttleVal - THROTTLE_ADC_MIN)
-                        / (float)(THROTTLE_ADC_MAX - THROTTLE_ADC_MIN);
+                float n = (float)(throttleVal - throttleAdcMin)
+                        / (float)(THROTTLE_ADC_MAX - throttleAdcMin);
                 n = constrain(n, 0.0f, 1.0f);
                 targetThrottle = FTESC_THROTTLE_NEUTRAL +
                     (uint16_t)(n * (FTESC_THROTTLE_MAX - FTESC_THROTTLE_NEUTRAL));
