@@ -94,12 +94,33 @@ function broadcastSSE(obj) {
 const TOOL_SCHEMA = {
   type: 'function',
   name: 'commande_trottinette',
-  description: 'Envoie une commande de contrôle à la trottinette',
+  description:
+    'Envoie une commande de contrôle à la trottinette électrique. ' +
+    'Utilise cet outil pour toute demande de mouvement, de vitesse ou de direction.',
   parameters: {
     type: 'object',
     properties: {
-      action:    { type: 'string', enum: ['forward', 'brake', 'stop'] },
-      intensity: { type: 'number', minimum: 0, maximum: 1 }
+      action: {
+        type: 'string',
+        enum: ['avancer', 'freiner', 'arreter', 'vitesse_lente', 'vitesse_moyenne', 'vitesse_haute', 'marche_arriere'],
+        description:
+          'avancer = accélérer (utilise intensity), ' +
+          'freiner = ralentir/freiner (utilise intensity), ' +
+          'arreter = arrêt complet immédiat, ' +
+          'vitesse_lente = passer en vitesse lente (limite ~33 %), ' +
+          'vitesse_moyenne = passer en vitesse moyenne (limite ~66 %), ' +
+          'vitesse_haute = passer en vitesse haute (plein régime), ' +
+          'marche_arriere = reculer'
+      },
+      intensity: {
+        type: 'number',
+        minimum: 0,
+        maximum: 1,
+        description:
+          'Intensité 0.0–1.0 — uniquement pour forward et brake. ' +
+          'Exemples : forward 0.3 = lent, 0.7 = rapide, 1.0 = plein gaz ; ' +
+          'brake 0.5 = freinage normal, 1.0 = freinage d\'urgence.'
+      }
     },
     required: ['action']
   }
@@ -190,13 +211,20 @@ function connectOpenAI() {
       session: {
         modalities: ['text', 'audio'],
         instructions:
-          'Tu es l\'assistant vocal d\'une trottinette électrique intelligente. ' +
-          'Tu communiques exclusivement en français, de façon concise et dynamique. ' +
-          'Tu peux contrôler la trottinette (avancer, freiner, arrêter) via l\'outil commande_trottinette, ' +
-          'et consulter sa télémétrie en temps réel (vitesse, tension batterie, courant, température, GPS) ' +
-          'via l\'outil lire_telemetrie. ' +
-          'Utilise toujours les outils plutôt que d\'inventer des valeurs. ' +
-          'Réponds en une ou deux phrases maximum.',
+          'Tu es le système de contrôle vocal d\'une trottinette électrique. ' +
+          'Tu communiques UNIQUEMENT en français, en une phrase courte. ' +
+          'RÈGLE ABSOLUE : toute demande de mouvement (avancer, accélérer, reculer, freiner, arrêter, changer de vitesse) ' +
+          'DOIT OBLIGATOIREMENT déclencher un appel à l\'outil commande_trottinette. ' +
+          'Tu es INCAPABLE de contrôler la trottinette autrement. ' +
+          'Si tu ne rappelles pas l\'outil, la trottinette ne bougera PAS. ' +
+          'Toute question sur la vitesse ou la batterie DOIT appeler lire_telemetrie. ' +
+          'Exemples : "avance" → commande_trottinette(avancer, 0.6) ; ' +
+          '"à fond" → commande_trottinette(avancer, 1.0) ; ' +
+          '"doucement" → commande_trottinette(avancer, 0.3) ; ' +
+          '"freine" → commande_trottinette(freiner, 0.8) ; ' +
+          '"stop" → commande_trottinette(arreter) ; ' +
+          '"marche arrière" → commande_trottinette(marche_arriere). ' +
+          'Appelle TOUJOURS l\'outil EN PREMIER, puis confirme en une phrase.',
         voice: 'alloy',
         input_audio_format: 'pcm16',
         output_audio_format: 'pcm16',
@@ -250,13 +278,19 @@ function connectOpenAI() {
           try {
             const args = JSON.parse(event.arguments);
             sendScooterCmd(args.action, args.intensity);
+            console.log(`[openai] commande: ${args.action} intensity=${args.intensity ?? 'n/a'}`);
 
             openaiWs.send(JSON.stringify({
               type: 'conversation.item.create',
               item: {
                 type: 'function_call_output',
                 call_id: event.call_id,
-                output: JSON.stringify({ success: true })
+                output: JSON.stringify({
+                  success: true,
+                  action: args.action,
+                  intensity: args.intensity ?? null,
+                  telemetry: lastTelemetry
+                })
               }
             }));
             openaiWs.send(JSON.stringify({ type: 'response.create' }));
@@ -540,11 +574,26 @@ esp32Wss.on('connection', (ws) => {
   esp32Ws = ws;
 
   ws.on('message', (data, isBinary) => {
-    if (isBinary && openaiWs && openaiWs.readyState === WebSocket.OPEN) {
-      openaiWs.send(JSON.stringify({
-        type: 'input_audio_buffer.append',
-        audio: Buffer.from(data).toString('base64')
-      }));
+    if (isBinary) {
+      // Audio PCM → OpenAI Realtime
+      if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+        openaiWs.send(JSON.stringify({
+          type: 'input_audio_buffer.append',
+          audio: Buffer.from(data).toString('base64')
+        }));
+      }
+    } else {
+      // Message texte : télémétrie JSON venant de l'ESP32
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'telemetry') {
+          const { type, ...fields } = msg;
+          lastTelemetry = { ...lastTelemetry, ...fields };
+          // Relayer aux clients SSE (navigateur)
+          const payload = `data: ${JSON.stringify({ type: 'telemetry', ...fields })}\n\n`;
+          for (const c of sseClients) { try { c.write(payload); } catch (_) {} }
+        }
+      } catch (_) { /* ignore */ }
     }
   });
 

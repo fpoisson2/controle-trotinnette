@@ -7,12 +7,14 @@
 #include "esp_wpa2.h"
 #include "audio.h"
 #include "config.h"
+#include "flipsky.h"
+
+static FlipskyData escData;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  État global
 // ─────────────────────────────────────────────────────────────────────────────
 static volatile bool voiceActive = false;
-static volatile bool btnPrev     = HIGH;
 
 // WebSocket serveur (télémétrie vers proxy)
 static WebSocketsServer wsServer(WS_SERVER_PORT);
@@ -22,8 +24,18 @@ static uint8_t          wsServerClientNum = 255;
 static WebSocketsClient wsProxy;
 static volatile bool    wsProxyConnected = false;
 
-static String lastAction    = "";
-static float  lastIntensity = 0.0f;
+static String   lastAction      = "";
+static float    lastIntensity   = 0.0f;
+static uint16_t currentThrottle = FTESC_THROTTLE_NEUTRAL;
+static uint8_t  currentGear     = FTESC_GEAR_HIGH;
+static bool     brakeLightOn    = false;
+
+// Buffer télémétrie partagé Core0→Core1 (wsProxy uniquement sur Core1)
+static volatile bool telemetryPending = false;
+static char          telemetryJsonBuf[256];
+
+// Timestamp dernière commande IA (priorité sur manette physique)
+static volatile uint32_t lastAiCmd = 0;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Connexion WiFi
@@ -98,9 +110,34 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 Serial.printf("[ia] %s", doc["text"] | "");
             } else if (strcmp(evtype, "cmd") == 0) {
                 lastAction    = doc["action"] | "";
-                lastIntensity = doc["intensity"] | 0.0f;
+                lastIntensity = doc["intensity"] | 0.5f;
+                lastAiCmd     = millis();
                 Serial.printf("[cmd] %s @ %.2f\n", lastAction.c_str(), lastIntensity);
-                // → piloter les moteurs
+
+                // Cmd 02H : throttle 0-1023, 512=neutre
+                if (lastAction == "avancer") {
+                    currentThrottle = (uint16_t)(FTESC_THROTTLE_NEUTRAL +
+                        lastIntensity * (FTESC_THROTTLE_MAX - FTESC_THROTTLE_NEUTRAL));
+                    if (currentGear == FTESC_GEAR_REVERSE) currentGear = FTESC_GEAR_HIGH;
+                    brakeLightOn    = false;
+                } else if (lastAction == "freiner") {
+                    currentThrottle = (uint16_t)(FTESC_THROTTLE_NEUTRAL -
+                        lastIntensity * FTESC_THROTTLE_NEUTRAL);
+                    brakeLightOn    = true;
+                } else if (lastAction == "arreter") {
+                    currentThrottle = FTESC_THROTTLE_NEUTRAL;
+                    brakeLightOn    = false;
+                } else if (lastAction == "vitesse_lente") {
+                    currentGear = FTESC_GEAR_LOW;
+                } else if (lastAction == "vitesse_moyenne") {
+                    currentGear = FTESC_GEAR_MEDIUM;
+                } else if (lastAction == "vitesse_haute") {
+                    currentGear = FTESC_GEAR_HIGH;
+                } else if (lastAction == "marche_arriere") {
+                    currentGear     = FTESC_GEAR_REVERSE;
+                    currentThrottle = FTESC_THROTTLE_NEUTRAL;
+                    brakeLightOn    = false;
+                }
             }
             break;
         }
@@ -153,7 +190,13 @@ static void taskCapture(void *) {
         }
         wasActive = nowActive;
 #else
-        wsProxy.loop();  // maintenir connexion + recevoir réponses IA
+        wsProxy.loop();  // maintenir connexion + recevoir réponses IA (Core1 seulement)
+
+        // Envoyer télémétrie en attente (écrit par Core0, envoyé ici sur Core1)
+        if (telemetryPending && wsProxyConnected) {
+            wsProxy.sendTXT(telemetryJsonBuf);
+            telemetryPending = false;
+        }
 
         size_t len = audioCaptureChunk(pcmBuf);  // toujours lire l'I2S
         if (voiceActive && wsProxyConnected && len > 0) {
@@ -193,7 +236,12 @@ static void onWsServerEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t
 }
 
 static void sendTelemetry() {
-    if (wsServerClientNum == 255) return;
+    // Envoyer via wsProxy (/ws-esp32) — toujours disponible même à travers Cloudflare
+    // Envoyer aussi via wsServer (port 8080) si un client local est connecté
+    bool canSendProxy = wsProxyConnected;
+    bool canSendServer = (wsServerClientNum != 255);
+    if (!canSendProxy && !canSendServer) return;
+
     JsonDocument doc;
 #if FAKE_TELEMETRY
     static float simLat   = 46.8492f;
@@ -210,13 +258,31 @@ static void sendTelemetry() {
     doc["lat"]     = simLat;
     doc["lon"]     = simLon;
 #else
-    doc["speed"] = 0.0f; doc["voltage"] = 0.0f;
-    doc["current"] = 0.0f; doc["temp"] = 0.0f;
+    {
+        float rpm   = fabsf(escData.rpm);
+        float speed = rpm / (float)ESC_POLE_PAIRS * 60.0f / 1000.0f;
+        doc["speed"]   = speed;
+        doc["voltage"] = escData.voltage;
+        doc["current"] = escData.motorCurrent;
+        doc["temp"]    = escData.tempFet;
+    }
     doc["lat"] = 0.0f; doc["lon"] = 0.0f;
 #endif
+    // Ajouter type pour que le proxy sache que c'est de la télémétrie
+    doc["type"] = "telemetry";
+
     char buf[256];
     serializeJson(doc, buf, sizeof(buf));
-    wsServer.sendTXT(wsServerClientNum, buf);
+
+    // wsProxy : copier dans le buffer partagé, Core1 (taskCapture) envoie
+    if (canSendProxy) {
+        memcpy(telemetryJsonBuf, buf, strlen(buf) + 1);
+        telemetryPending = true;
+    }
+    // wsServer (port 8080) : envoi direct depuis Core0, c'est son propre serveur
+    if (canSendServer) {
+        wsServer.sendTXT(wsServerClientNum, buf);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -228,7 +294,17 @@ void setup() {
     Serial.println("\n=== Trottinette Intelligente — ESP32 ===");
 
     pinMode(VOICE_BTN_PIN, INPUT_PULLUP);
+
+    // Boutons manette gear (actif LOW)
+    pinMode(GEAR_R_PIN, INPUT_PULLUP);
+    pinMode(GEAR_L_PIN, INPUT_PULLUP);
+    pinMode(GEAR_M_PIN, INPUT_PULLUP);
+    pinMode(GEAR_H_PIN, INPUT_PULLUP);
+
     connectWiFi();
+
+    Serial2.begin(ESC_BAUD, SERIAL_8N1, ESC_RX_PIN, ESC_TX_PIN);
+    Serial.println("[esc] Flipsky UART initialisé");
 
     esp_err_t e = audioInitI2S();
     Serial.printf("[i2s] %s\n", e == ESP_OK ? "OK" : "ERREUR");
@@ -272,24 +348,145 @@ void setup() {
 void loop() {
     wsServer.loop();
 
-    // Bouton toggle vocal (actif bas, anti-rebond 200 ms)
-    static uint32_t btnLastMs = 0;
-    bool btnNow = digitalRead(VOICE_BTN_PIN);
-    if (btnNow == LOW && btnPrev == HIGH && millis() - btnLastMs > 200) {
-        btnLastMs = millis();
-        voiceActive = !voiceActive;
-        Serial.printf("[btn] micro %s\n", voiceActive ? "ACTIF" : "INACTIF");
+
+    // ── Gear-R = push-to-talk : tenir = micro actif, relâcher = inactif ────────
+    bool gearRNow = digitalRead(GEAR_R_PIN);
+    bool voiceFromGear = (gearRNow == LOW);
+    voiceActive = voiceFromGear;
+
+    // ── Gear-L / M / H : sélection de vitesse (D6 cmd 02H) ──────────────────
+    static uint8_t prevGear = FTESC_GEAR_HIGH;
+    bool gH = digitalRead(GEAR_H_PIN) == LOW;
+    bool gM = digitalRead(GEAR_M_PIN) == LOW;
+    bool gL = digitalRead(GEAR_L_PIN) == LOW;
+    if (gH) currentGear = FTESC_GEAR_HIGH;
+    else if (gM) currentGear = FTESC_GEAR_MEDIUM;
+    else if (gL) currentGear = FTESC_GEAR_LOW;
+    if (currentGear != prevGear) {
+        Serial.printf("[gear] L=%d M=%d H=%d → gear=%d\n", gL, gM, gH, currentGear);
+        prevGear = currentGear;
     }
-    btnPrev = btnNow;
+
+    // ── Log ADC toutes les 2s pour calibration ────────────────────────────────
+    static uint32_t lastAdcLog = 0;
+    if (millis() - lastAdcLog > 2000) {
+        lastAdcLog = millis();
+        Serial.printf("[adc] thr=%d brk=%d gR=%d gL=%d gM=%d gH=%d\n",
+            analogRead(THROTTLE_ADC_PIN), analogRead(BRAKE_ADC_PIN),
+            !digitalRead(GEAR_R_PIN), !digitalRead(GEAR_L_PIN),
+            !digitalRead(GEAR_M_PIN), !digitalRead(GEAR_H_PIN));
+    }
 
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[wifi] connexion perdue — reconnexion...");
         connectWiFi();
     }
 
-    static uint32_t lastTelemetry = 0;
-    if (millis() - lastTelemetry >= TELEMETRY_MS) {
-        lastTelemetry = millis();
-        sendTelemetry();
+    // ── Cmd 02H : contrôle + télémétrie toutes les 50 ms (20 Hz) ────────────
+    static uint32_t lastControl = 0;
+    if (millis() - lastControl >= 50) {
+        lastControl = millis();
+#if !FAKE_TELEMETRY
+        // Attendre 3s après le boot pour laisser l'ESC finir son initialisation
+        const bool escReady = (millis() >= 3000);
+        if (escReady) {
+        // Priorité IA pendant AI_CMD_PRIORITY_MS, ensuite manette physique
+        bool aiActive = (millis() - lastAiCmd < AI_CMD_PRIORITY_MS);
+        if (!aiActive) {
+            // Filtre médian 5 échantillons : immunisé contre les spikes ADC
+            auto adcMedian5 = [](int pin) -> int {
+                int s[5];
+                for (int i = 0; i < 5; i++) s[i] = analogRead(pin);
+                // tri insertion
+                for (int i = 1; i < 5; i++) {
+                    int k = s[i], j = i - 1;
+                    while (j >= 0 && s[j] > k) { s[j+1] = s[j]; j--; }
+                    s[j+1] = k;
+                }
+                return s[2]; // médiane
+            };
+            // IIR sur les lectures médianes (α=0.5 : rapide mais lisse les résidus)
+            static float thrSmooth = THROTTLE_ADC_MIN;
+            static float brkSmooth = BRAKE_ADC_MIN;
+            thrSmooth = 0.5f * adcMedian5(THROTTLE_ADC_PIN) + 0.5f * thrSmooth;
+            brkSmooth = 0.5f * adcMedian5(BRAKE_ADC_PIN)    + 0.5f * brkSmooth;
+            int throttleVal = (int)thrSmooth;
+            int brakeVal    = (int)brkSmooth;
+
+            // Hystérésis throttle : ON > MIN+100, OFF < MIN+50 → empêche vmvmvm
+            static bool throttleOn = false;
+            if (!throttleOn && throttleVal > THROTTLE_ADC_MIN + THROTTLE_DEADZONE)
+                throttleOn = true;
+            else if (throttleOn && throttleVal < THROTTLE_ADC_MIN + THROTTLE_DEADZONE / 2)
+                throttleOn = false;
+
+            // Hystérésis frein : ON > MIN+100, OFF < MIN+50
+            static bool brakeOn = false;
+            if (!brakeOn && brakeVal > BRAKE_ADC_MIN + BRAKE_DEADZONE)
+                brakeOn = true;
+            else if (brakeOn && brakeVal < BRAKE_ADC_MIN + BRAKE_DEADZONE / 2)
+                brakeOn = false;
+
+            uint16_t targetThrottle;
+            if (brakeOn) {
+                int mapped = map(brakeVal, BRAKE_ADC_MIN, BRAKE_ADC_MAX,
+                                 FTESC_THROTTLE_NEUTRAL, FTESC_THROTTLE_MIN);
+                targetThrottle = (uint16_t)constrain(mapped,
+                                 FTESC_THROTTLE_MIN, FTESC_THROTTLE_NEUTRAL);
+                brakeLightOn = true;
+            } else if (throttleOn) {
+                float n = (float)(throttleVal - THROTTLE_ADC_MIN)
+                        / (float)(THROTTLE_ADC_MAX - THROTTLE_ADC_MIN);
+                n = constrain(n, 0.0f, 1.0f);
+                targetThrottle = FTESC_THROTTLE_NEUTRAL +
+                    (uint16_t)(n * (FTESC_THROTTLE_MAX - FTESC_THROTTLE_NEUTRAL));
+                brakeLightOn = false;
+            } else {
+                targetThrottle = FTESC_THROTTLE_NEUTRAL;
+                brakeLightOn   = false;
+            }
+
+            // Soft gear limit (firmware, indépendant du ESC)
+            uint16_t gearMax;
+            switch (currentGear) {
+                case FTESC_GEAR_LOW:    gearMax = 680;  break;  // ~33% puissance
+                case FTESC_GEAR_MEDIUM: gearMax = 840;  break;  // ~64% puissance
+                default:                gearMax = FTESC_THROTTLE_MAX; break;
+            }
+            if (targetThrottle > gearMax) targetThrottle = gearMax;
+
+            // Rate limiting :
+            //   démarrage (RPM < 100) → immédiat (couple max pour vaincre la charge)
+            //   accélération en mouvement → +150/cycle (~170ms neutre→max)
+            //   relâche/frein → immédiat (neutre ou frein sans délai)
+            const uint16_t RAMP_UP = (fabsf(escData.rpm) < 100) ? 511 : 150;
+            if (targetThrottle > currentThrottle + RAMP_UP)
+                currentThrottle += RAMP_UP;
+            else
+                currentThrottle = targetThrottle;
+        }
+
+        // Si on freine et moteur arrêté → retour au neutre
+        if (brakeLightOn && fabsf(escData.rpm) < 5.0f) {
+            currentThrottle = FTESC_THROTTLE_NEUTRAL;
+            brakeLightOn    = false;
+        }
+
+        ftesc_control(Serial2, currentThrottle, currentGear, brakeLightOn);
+        if (ftesc_poll(Serial2, escData)) {
+            // RPM → km/h : roue 8.5" (≈0.216m diam) avec réduction ESC_POLE_PAIRS
+            float kmh = fabsf(escData.rpm) / ESC_POLE_PAIRS
+                        * 60.0f * 0.216f * 3.14159f / 1000.0f;
+            Serial.printf("[esc] thr=%u %.1fkm/h V=%.1fV A=%.2fA RPM=%.0f T=%.1f°C\n",
+                currentThrottle, kmh, escData.voltage, escData.motorCurrent,
+                escData.rpm, escData.tempFet);
+        }
+        }  // end if (escReady)
+#endif
+        static uint32_t lastTelSend = 0;
+        if (millis() - lastTelSend >= TELEMETRY_MS) {
+            lastTelSend = millis();
+            sendTelemetry();
+        }
     }
 }
