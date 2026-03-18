@@ -9,20 +9,30 @@
 - Emoji comme icônes (🎤 🗺️ 📊)
 - Header surchargé : titre + 3 dots + 3 labels + 4 boutons + badge dans 48px
 
-## Nouvelle palette — violet/mint (pas bleu générique)
+## Nouvelle palette — basée sur l'identité graphique du Cégep Limoilou
 
-| Variable | Hex | Usage |
-|----------|-----|-------|
-| `--bg` | `#0a0a0f` | Near-black avec undertone bleu |
-| `--surface` | `#14141f` | Cards, panels |
-| `--surface-raised` | `#1c1c2b` | Hover, éléments élevés |
-| `--accent` | `#7c5cff` | **Violet** — accent principal |
-| `--speed` | `#00e5a0` | Mint électrique — vitesse |
-| `--battery` | `#ffd43b` | Ambre chaud — batterie |
-| `--current` | `#ff6b35` | Orange électrique — courant |
-| `--temp` | `#ff4757` | Rouge-rose — température |
-| `--ptt-idle` | `#7c5cff` | Ring PTT inactif |
-| `--ptt-active` | `#ff4757` | PTT enregistrement |
+Le Cégep utilise une palette audacieuse : rouge vif + néons (teal, cyan, vert lime, jaune) sur fond sombre.
+On adapte ces couleurs au dashboard dark mode pour une cohérence visuelle totale avec la landing page.
+
+| Variable | Hex | Source | Usage dashboard |
+|----------|-----|--------|-----------------|
+| `--bg` | `#121212` | Cégep `darkgrey` | Background principal |
+| `--surface` | `#1e1e1e` | Dérivé du charcoal Cégep | Cards, panels |
+| `--surface-raised` | `#2a2a2a` | Dérivé | Hover, éléments élevés |
+| `--accent` | `#00f8ce` | Cégep `teal` | **Accent principal** — liens, sélection |
+| `--accent-alt` | `#42f7fb` | Cégep `blue` | Accents secondaires |
+| `--speed` | `#00f8ce` | Cégep `teal` | Vitesse — speedomètre |
+| `--battery` | `#bae562` | Cégep `green` | Batterie — vert lime |
+| `--current` | `#f6fd54` | Cégep `yellow` | Courant — jaune néon |
+| `--temp` | `#ed1e20` | Cégep `red` | Température / danger |
+| `--danger` | `#ed1e20` | Cégep `red` | Rouge Limoilou — erreurs, arrêt urgence |
+| `--ptt-idle` | `#00f8ce` | Cégep `teal` | Ring PTT inactif |
+| `--ptt-active` | `#ed1e20` | Cégep `red` | PTT enregistrement |
+| `--text` | `#f0f0f5` | — | Texte principal |
+| `--text-secondary` | `#dcdcdc` | Cégep `grey` | Texte secondaire |
+| `--border` | `#343030` | Cégep `charcoal` | Bordures |
+
+**Pourquoi c'est mieux que violet/mint** : c'est la même identité que la landing page et le site du Cégep. Un étudiant qui vient du site Limoilou reconnaît immédiatement les couleurs. Le teal néon (`#00f8ce`) est distinctif et pas du tout "généré par IA".
 
 ## Typographie (Inter, base 16px mobile)
 
