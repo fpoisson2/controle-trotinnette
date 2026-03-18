@@ -9,13 +9,25 @@ const path     = require('path');
 const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
 
+// ─── Timestamps dans les logs ────────────────────────────────────────────────
+for (const method of ['log', 'warn', 'error']) {
+  const orig = console[method].bind(console);
+  console[method] = (...args) => orig(`[${new Date().toISOString()}]`, ...args);
+}
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 const AUTH_USERNAME = process.env.AUTH_USERNAME || 'admin';
-const AUTH_PASSWORD_HASH = process.env.AUTH_PASSWORD_HASH || '';
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '';
+let   AUTH_PASSWORD_HASH = process.env.AUTH_PASSWORD_HASH || '';
 const JWT_SECRET  = process.env.JWT_SECRET || '';
 const JWT_EXPIRY  = '12h';
 
-if (!AUTH_PASSWORD_HASH) console.error('[auth] ATTENTION : AUTH_PASSWORD_HASH non défini dans .env');
+// Si le hash est absent ou corrompu mais le mot de passe en clair est dispo, générer le hash
+if (AUTH_PASSWORD && (!AUTH_PASSWORD_HASH || !AUTH_PASSWORD_HASH.startsWith('$2'))) {
+  AUTH_PASSWORD_HASH = bcrypt.hashSync(AUTH_PASSWORD, 12);
+  console.log('[auth] hash bcrypt généré à partir de AUTH_PASSWORD');
+}
+if (!AUTH_PASSWORD_HASH) console.error('[auth] ATTENTION : AUTH_PASSWORD ni AUTH_PASSWORD_HASH définis dans .env');
 if (!JWT_SECRET)         console.error('[auth] ATTENTION : JWT_SECRET non défini dans .env');
 
 // Tentatives de login par IP (rate limiting)
@@ -74,6 +86,8 @@ let esp32Ws           = null;      // WebSocket ESP32 (/ws-esp32)
 let openaiWs          = null;      // WebSocket vers OpenAI Realtime
 let openaiConnected   = false;
 let lastTelemetry     = { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0 };
+let esp32FwVersion    = null;      // version firmware ESP32 (reçue via hello)
+let esp32DebugMode    = false;     // mode debug ESP32 actif
 
 // ─── Broadcast vers navigateurs (SSE) + ESP32 (WS) ───────────────────────────
 function broadcastSSE(obj) {
@@ -99,24 +113,23 @@ const TOOL_SCHEMA = {
     properties: {
       action: {
         type: 'string',
-        enum: ['avancer', 'freiner', 'arreter', 'vitesse_lente', 'vitesse_moyenne', 'vitesse_haute', 'marche_arriere'],
+        enum: ['avancer', 'freiner', 'arreter', 'vitesse_lente', 'vitesse_moyenne', 'vitesse_haute'],
         description:
           'avancer = accélérer (utilise intensity), ' +
           'freiner = ralentir/freiner (utilise intensity), ' +
           'arreter = arrêt complet immédiat, ' +
           'vitesse_lente = passer en vitesse lente (limite ~33 %), ' +
           'vitesse_moyenne = passer en vitesse moyenne (limite ~66 %), ' +
-          'vitesse_haute = passer en vitesse haute (plein régime), ' +
-          'marche_arriere = reculer'
+          'vitesse_haute = passer en vitesse haute (plein régime)'
       },
       intensity: {
         type: 'number',
         minimum: 0,
         maximum: 1,
         description:
-          'Intensité 0.0–1.0 — uniquement pour forward et brake. ' +
-          'Exemples : forward 0.3 = lent, 0.7 = rapide, 1.0 = plein gaz ; ' +
-          'brake 0.5 = freinage normal, 1.0 = freinage d\'urgence.'
+          'Intensité 0.0–1.0 — pour avancer et freiner. ' +
+          'Exemples : avancer 0.3 = lent, 0.7 = rapide, 1.0 = plein gaz ; ' +
+          'freiner 0.5 = freinage normal, 1.0 = freinage d\'urgence.'
       }
     },
     required: ['action']
@@ -174,17 +187,19 @@ function connectOpenAI() {
         instructions:
           'Tu es le système de contrôle vocal d\'une trottinette électrique. ' +
           'Tu communiques UNIQUEMENT en français, en une phrase courte. ' +
-          'RÈGLE ABSOLUE : toute demande de mouvement (avancer, accélérer, reculer, freiner, arrêter, changer de vitesse) ' +
-          'DOIT OBLIGATOIREMENT déclencher un appel à l\'outil commande_trottinette. ' +
-          'Tu es INCAPABLE de contrôler la trottinette autrement. ' +
-          'Si tu ne rappelles pas l\'outil, la trottinette ne bougera PAS. ' +
-          'Toute question sur la vitesse ou la batterie DOIT appeler lire_telemetrie. ' +
-          'Exemples : "avance" → commande_trottinette(avancer, 0.6) ; ' +
+          'IL Y A DEUX TYPES DE DEMANDES — ne les confonds JAMAIS :\n' +
+          '1) QUESTIONS / INFORMATIONS (batterie, tension, vitesse, température, position) ' +
+          '→ appelle UNIQUEMENT lire_telemetrie. N\'appelle JAMAIS commande_trottinette pour une question.\n' +
+          '2) COMMANDES DE MOUVEMENT (avancer, accélérer, freiner, arrêter, changer de vitesse) ' +
+          '→ appelle UNIQUEMENT commande_trottinette.\n' +
+          'Exemples QUESTIONS : "quelle est la tension ?" → lire_telemetrie ; ' +
+          '"on roule à combien ?" → lire_telemetrie ; ' +
+          '"batterie ?" → lire_telemetrie.\n' +
+          'Exemples COMMANDES : "avance" → commande_trottinette(avancer, 0.6) ; ' +
           '"à fond" → commande_trottinette(avancer, 1.0) ; ' +
           '"doucement" → commande_trottinette(avancer, 0.3) ; ' +
           '"freine" → commande_trottinette(freiner, 0.8) ; ' +
-          '"stop" → commande_trottinette(arreter) ; ' +
-          '"marche arrière" → commande_trottinette(marche_arriere). ' +
+          '"stop" → commande_trottinette(arreter).\n' +
           'Appelle TOUJOURS l\'outil EN PREMIER, puis confirme en une phrase.',
         voice: 'alloy',
         input_audio_format: 'pcm16',
@@ -192,6 +207,7 @@ function connectOpenAI() {
         input_audio_transcription: null,
         turn_detection: {
           type: 'semantic_vad',
+          eagerness: 'high',
           create_response: true,
           interrupt_response: true
         },
@@ -501,6 +517,7 @@ app.post('/audio', async (req, res) => {
 app.use(requireAuth);
 
 // ── POST /audio/commit (utilisé en mode local uniquement — semantic_vad gère les tours en mode cloud) ──
+
 app.post('/audio/commit', (req, res) => {
   if (USE_LOCAL_AI && openaiWs && openaiWs.readyState === WebSocket.OPEN) {
     openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
@@ -517,13 +534,190 @@ app.post('/cmd', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── POST /debug — activer/désactiver le mode debug ESP32 ──
+app.post('/debug', (req, res) => {
+  const { enabled } = req.body;
+  esp32DebugMode = !!enabled;
+  if (esp32Ws && esp32Ws.readyState === WebSocket.OPEN) {
+    esp32Ws.send(JSON.stringify({ type: 'debug', enabled: esp32DebugMode }));
+  }
+  console.log(`[debug] mode ${esp32DebugMode ? 'activé' : 'désactivé'}`);
+  res.json({ ok: true, debug: esp32DebugMode });
+});
+
 // ── GET /status ──
 app.get('/status', (req, res) => {
   const esp32Connected = esp32Ws && esp32Ws.readyState === WebSocket.OPEN;
   res.json({
     mode: USE_LOCAL_AI ? 'local' : 'cloud',
     openai_connected: USE_LOCAL_AI ? null : openaiConnected,
-    scooter_connected: esp32Connected
+    scooter_connected: esp32Connected,
+    fw_version: esp32FwVersion,
+    debug: esp32DebugMode
+  });
+});
+
+// ─── OTA via proxy : flashFirmware() partagé ──────────────────────────────────
+let otaInProgress = false;
+let otaResolve    = null;
+
+// Fonction partagée : envoie un Buffer firmware à l'ESP32 via WebSocket
+// Retourne une Promise<{ok, message, error}>
+function flashFirmware(firmware) {
+  return new Promise((resolve, reject) => {
+    if (!esp32Ws || esp32Ws.readyState !== WebSocket.OPEN) {
+      return reject(new Error('ESP32 non connecté'));
+    }
+    if (otaInProgress) {
+      return reject(new Error('OTA déjà en cours'));
+    }
+    if (!Buffer.isBuffer(firmware) || firmware.length < 1000) {
+      return reject(new Error('Firmware invalide (trop petit ou pas un Buffer)'));
+    }
+
+    console.log(`[ota] envoi firmware ${firmware.length} bytes à l'ESP32`);
+    otaInProgress = true;
+
+    esp32Ws.send(JSON.stringify({ type: 'ota_begin', size: firmware.length }));
+
+    const CHUNK = 1024;
+    let offset = 0;
+
+    function sendNextChunk() {
+      if (offset >= firmware.length) {
+        esp32Ws.send(JSON.stringify({ type: 'ota_end' }));
+        return;
+      }
+      const end = Math.min(offset + CHUNK, firmware.length);
+      const chunk = firmware.slice(offset, end);
+      esp32Ws.send(chunk, { binary: true }, () => {
+        offset = end;
+        const pct = Math.round(offset / firmware.length * 100);
+        if (pct % 10 === 0) console.log(`[ota] envoyé ${pct}%`);
+        setTimeout(sendNextChunk, 20);
+      });
+    }
+
+    const otaTimeout = setTimeout(() => {
+      otaInProgress = false;
+      otaResolve = null;
+      reject(new Error('Timeout — pas de réponse de l\'ESP32'));
+    }, 120000);
+
+    otaResolve = (result) => {
+      clearTimeout(otaTimeout);
+      otaInProgress = false;
+      otaResolve = null;
+      if (result.success) {
+        console.log('[ota] succès — ESP32 redémarre');
+        resolve({ ok: true, message: 'Firmware flashé, ESP32 redémarre' });
+      } else {
+        console.error('[ota] échec :', result.error);
+        reject(new Error(result.error || 'Échec OTA'));
+      }
+    };
+
+    sendNextChunk();
+  });
+}
+
+// POST /ota — upload manuel .bin
+app.post('/ota', async (req, res) => {
+  try {
+    const result = await flashFirmware(req.body);
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes('non connecté') ? 503
+                 : err.message.includes('déjà en cours') ? 409
+                 : err.message.includes('Timeout') ? 504
+                 : err.message.includes('invalide') ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+// ─── GitHub Releases API ──────────────────────────────────────────────────────
+const GITHUB_REPO = 'fpoisson2/controle-trotinnette';
+let releaseCache = { data: null, ts: 0 };
+const RELEASE_CACHE_MS = 5 * 60 * 1000; // 5 minutes
+
+async function fetchLatestRelease() {
+  const now = Date.now();
+  if (releaseCache.data && (now - releaseCache.ts) < RELEASE_CACHE_MS) {
+    return releaseCache.data;
+  }
+
+  const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+  const resp = await fetch(url, {
+    headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'trottinette-proxy' }
+  });
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw new Error(`GitHub API ${resp.status}: ${resp.statusText}`);
+  }
+
+  const release = await resp.json();
+  const binAsset = release.assets?.find(a => a.name.endsWith('.bin'));
+  const result = {
+    version: release.tag_name.replace(/^v/, ''),
+    tag: release.tag_name,
+    published_at: release.published_at,
+    download_url: binAsset?.browser_download_url || null,
+    asset_name: binAsset?.name || null,
+    body: release.body || ''
+  };
+
+  releaseCache = { data: result, ts: now };
+  return result;
+}
+
+// GET /api/releases/latest
+app.get('/api/releases/latest', async (req, res) => {
+  try {
+    const release = await fetchLatestRelease();
+    if (!release) return res.status(404).json({ error: 'Aucune release trouvée' });
+    res.json(release);
+  } catch (err) {
+    console.error('[github] erreur fetch release :', err.message);
+    res.status(502).json({ error: 'Impossible de contacter GitHub : ' + err.message });
+  }
+});
+
+// POST /api/ota/github — télécharge le .bin depuis GitHub et flashe l'ESP32
+app.post('/api/ota/github', async (req, res) => {
+  try {
+    const release = await fetchLatestRelease();
+    if (!release) return res.status(404).json({ error: 'Aucune release trouvée' });
+    if (!release.download_url) return res.status(404).json({ error: 'Pas de .bin dans la release' });
+
+    console.log(`[ota-github] téléchargement ${release.asset_name} (${release.version})...`);
+    const dlResp = await fetch(release.download_url, {
+      headers: { 'User-Agent': 'trottinette-proxy' }
+    });
+    if (!dlResp.ok) throw new Error(`Téléchargement échoué: HTTP ${dlResp.status}`);
+
+    const arrayBuf = await dlResp.arrayBuffer();
+    const firmware = Buffer.from(arrayBuf);
+    console.log(`[ota-github] téléchargé ${firmware.length} bytes — flash OTA...`);
+
+    const result = await flashFirmware(firmware);
+    res.json({ ...result, version: release.version });
+  } catch (err) {
+    const status = err.message.includes('non connecté') ? 503
+                 : err.message.includes('déjà en cours') ? 409
+                 : err.message.includes('Timeout') ? 504 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+// ─── Debug audio : écouter le micro ESP32 depuis le navigateur ────────────────
+let debugAudioClients = [];  // WebSocket clients qui écoutent le micro
+const debugAudioWss = new WebSocket.Server({ noServer: true });
+debugAudioWss.on('connection', (ws) => {
+  debugAudioClients.push(ws);
+  console.log(`[debug-audio] client connecté (total: ${debugAudioClients.length})`);
+  ws.on('close', () => {
+    debugAudioClients = debugAudioClients.filter(c => c !== ws);
+    console.log(`[debug-audio] client déconnecté (total: ${debugAudioClients.length})`);
   });
 });
 
@@ -542,6 +736,14 @@ esp32Wss.on('connection', (ws) => {
           type: 'input_audio_buffer.append',
           audio: Buffer.from(data).toString('base64')
         }));
+      } else {
+        console.warn(`[esp32-ws] audio reçu mais OpenAI non connecté (ws=${!!openaiWs}, state=${openaiWs?.readyState})`);
+      }
+      // Relayer le PCM brut aux clients debug-audio
+      for (const c of debugAudioClients) {
+        if (c.readyState === WebSocket.OPEN) {
+          try { c.send(data, { binary: true }); } catch (_) {}
+        }
       }
     } else {
       // Message texte : télémétrie JSON venant de l'ESP32
@@ -553,6 +755,22 @@ esp32Wss.on('connection', (ws) => {
           // Relayer aux clients SSE (navigateur)
           const payload = `data: ${JSON.stringify({ type: 'telemetry', ...fields })}\n\n`;
           for (const c of sseClients) { try { c.write(payload); } catch (_) {} }
+        } else if (msg.type === 'hello') {
+          esp32FwVersion = msg.version || null;
+          console.log(`[esp32-ws] firmware version: ${esp32FwVersion}`);
+          // Restaurer l'état debug si actif
+          if (esp32DebugMode) {
+            ws.send(JSON.stringify({ type: 'debug', enabled: true }));
+          }
+        } else if (msg.type === 'log') {
+          // Relayer les logs ESP32 aux clients SSE
+          const payload = `data: ${JSON.stringify({ type: 'esp32_log', msg: msg.msg })}\n\n`;
+          for (const c of sseClients) { try { c.write(payload); } catch (_) {} }
+        } else if (msg.type === 'ota_progress') {
+          console.log(`[ota] ESP32 : ${msg.percent}%`);
+          broadcastSSE({ type: 'ota_progress', percent: msg.percent });
+        } else if (msg.type === 'ota_result') {
+          if (otaResolve) otaResolve(msg);
         }
       } catch (_) { /* ignore */ }
     }
@@ -561,6 +779,10 @@ esp32Wss.on('connection', (ws) => {
   ws.on('close', () => {
     console.log('[esp32-ws] ESP32 déconnecté');
     if (esp32Ws === ws) esp32Ws = null;
+    // Si l'ESP32 se déconnecte pendant un OTA, c'est un reboot → succès
+    if (otaInProgress && otaResolve) {
+      otaResolve({ success: true, message: 'ESP32 rebooté après flash' });
+    }
   });
 });
 
@@ -571,6 +793,10 @@ server.on('upgrade', (req, socket, head) => {
   if (req.url === '/ws-esp32') {
     esp32Wss.handleUpgrade(req, socket, head, (ws) => {
       esp32Wss.emit('connection', ws, req);
+    });
+  } else if (req.url === '/ws-debug-audio') {
+    debugAudioWss.handleUpgrade(req, socket, head, (ws) => {
+      debugAudioWss.emit('connection', ws, req);
     });
   }
 });

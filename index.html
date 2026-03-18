@@ -415,7 +415,10 @@
   </div>
   <span class="mode-badge" id="mode-badge">CLOUD</span>
   <button class="hdr-btn" id="sim-btn" onclick="toggleSim()">SIM</button>
+  <button class="hdr-btn" id="mute-btn" onclick="toggleMute()" title="Couper/activer le son de l'assistant">🔊</button>
+  <button class="hdr-btn" id="debug-btn" onclick="toggleDebug()" title="Mode debug ESP32">DBG</button>
   <button class="hdr-btn" onclick="logout()" title="Déconnexion">⏻</button>
+  <span id="fw-version" style="font-size:10px;color:var(--muted);margin-left:4px"></span>
 </header>
 
 <!-- ══════════════════════════════════════════
@@ -495,6 +498,7 @@
         <div class="panel-title">Commande vocale</div>
         <div class="panel-body">
           <button id="ptt-btn-desktop" class="ptt-btn-inner" title="Activer/désactiver le micro">🎤</button>
+          <button id="monitor-btn-desktop" class="ptt-btn-inner" style="font-size:0.7em;padding:4px 8px;background:var(--surface);border:1px solid var(--border);color:var(--muted);cursor:pointer;border-radius:var(--radius);margin-top:6px" title="Écouter le micro ESP32 en direct" onclick="toggleMonitor()">🔊 Monitor</button>
           <div id="voice-status-desktop" class="voice-status-inner">INACTIF — cliquer pour parler</div>
         </div>
       </div>
@@ -502,9 +506,9 @@
         <div class="panel-title">Contrôle manuel</div>
         <div class="panel-body">
           <div class="btn-row">
-            <button class="btn forward" onclick="sendCmd('forward')">▲ AVANCER</button>
-            <button class="btn brake"   onclick="sendCmd('brake')">◼ FREINER</button>
-            <button class="btn stop"    onclick="sendCmd('stop')">✕ ARRÊT</button>
+            <button class="btn forward" onclick="sendCmd('avancer')">▲ AVANCER</button>
+            <button class="btn brake"   onclick="sendCmd('freiner')">◼ FREINER</button>
+            <button class="btn stop"    onclick="sendCmd('arreter')">✕ ARRÊT</button>
           </div>
           <div class="slider-row">
             <label>INTENSITÉ</label>
@@ -523,6 +527,8 @@
         <div id="voice-log-desktop"></div>
       </div>
     </div>
+
+    <!-- Debug modal placeholder (rendu par JS) -->
 
   </div><!-- /right-col -->
 </div><!-- /main-desktop -->
@@ -595,12 +601,13 @@
   <!-- Onglet Contrôle -->
   <div class="tab-section" id="tab-control">
     <button id="ptt-btn" title="Activer/désactiver le micro">🎤</button>
+    <button id="monitor-btn-mobile" style="font-size:0.8em;padding:6px 12px;background:var(--surface);border:1px solid var(--border);color:var(--muted);cursor:pointer;border-radius:var(--radius);margin-top:6px" title="Écouter le micro ESP32 en direct" onclick="toggleMonitor()">🔊 Monitor</button>
     <div id="voice-status">INACTIF — appuyer pour parler</div>
     <hr class="divider">
     <div class="btn-row">
-      <button class="btn forward" onclick="sendCmd('forward')">▲ AVANCER</button>
-      <button class="btn brake"   onclick="sendCmd('brake')">◼ FREINER</button>
-      <button class="btn stop"    onclick="sendCmd('stop')">✕ ARRÊT</button>
+      <button class="btn forward" onclick="sendCmd('avancer')">▲ AVANCER</button>
+      <button class="btn brake"   onclick="sendCmd('freiner')">◼ FREINER</button>
+      <button class="btn stop"    onclick="sendCmd('arreter')">✕ ARRÊT</button>
     </div>
     <div class="slider-row">
       <label>INTENSITÉ</label>
@@ -634,6 +641,44 @@
     </button>
   </div>
 </nav>
+
+<!-- Modal Debug / OTA -->
+<div id="debug-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:90%;max-width:700px;height:70vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border)">
+      <span style="font-weight:700;flex:1">Debug ESP32 <span id="modal-fw-version" style="font-weight:400;color:var(--muted);font-size:12px"></span></span>
+      <button id="debug-pause-btn" onclick="toggleDebugPause()" style="background:none;border:1px solid var(--border);color:var(--muted);font-size:12px;cursor:pointer;border-radius:4px;padding:2px 8px;margin-right:8px" title="Pause/reprendre le d\u00e9filement">&#9208;</button>
+      <button onclick="document.getElementById('debug-log').innerHTML=''" style="background:none;border:1px solid var(--border);color:var(--muted);font-size:12px;cursor:pointer;border-radius:4px;padding:2px 8px;margin-right:8px" title="Vider les logs">Vider</button>
+      <button onclick="toggleDebug()" style="background:none;border:none;color:var(--text);font-size:20px;cursor:pointer">&times;</button>
+    </div>
+    <div id="debug-log" style="flex:1;min-height:0;overflow-y:auto;padding:8px 12px;font-family:monospace;font-size:12px"></div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border)">
+      <div style="font-weight:600;margin-bottom:8px">Mise a jour firmware</div>
+      <!-- Version actuelle vs disponible -->
+      <div id="ota-versions" style="display:flex;align-items:center;gap:12px;margin-bottom:8px;font-size:12px">
+        <span>Installe : <strong id="ota-installed">—</strong></span>
+        <span>Disponible : <strong id="ota-available">—</strong></span>
+        <span id="ota-update-badge" style="display:none;background:var(--green);color:#000;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700">MAJ disponible</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <button class="btn" id="ota-check-btn" onclick="checkFirmwareUpdate()" style="padding:6px 12px;font-size:12px;background:var(--surface);border:1px solid var(--border);color:var(--text);cursor:pointer;border-radius:var(--radius)">Verifier les mises a jour</button>
+        <button class="btn forward" id="ota-github-btn" onclick="flashFromGitHub()" disabled style="padding:6px 16px;font-size:12px">Mettre a jour</button>
+      </div>
+      <div id="ota-status" style="margin-top:6px;font-size:11px;color:var(--muted)"></div>
+      <div style="width:100%;height:4px;background:var(--border);border-radius:2px;margin-top:4px">
+        <div id="ota-bar" style="height:100%;background:var(--green);border-radius:2px;width:0;transition:width 0.3s"></div>
+      </div>
+      <!-- Fallback : upload manuel -->
+      <details style="margin-top:10px">
+        <summary style="font-size:11px;color:var(--muted);cursor:pointer">Upload manuel (.bin)</summary>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+          <input type="file" id="fw-file" accept=".bin" style="flex:1;font-size:12px">
+          <button class="btn forward" id="ota-upload-btn" onclick="uploadFirmware()" disabled style="padding:6px 16px;font-size:12px">Flasher</button>
+        </div>
+      </details>
+    </div>
+  </div>
+</div>
 
 <script>
 // ─── Détection mobile ─────────────────────────────────────────────────────────
@@ -869,11 +914,25 @@ function handleSSEMessage(msg) {
       addLog('cmd', `⚡ ${msg.action.toUpperCase()}${msg.intensity != null ? ' @ ' + Math.round(msg.intensity * 100) + '%' : ''}`);
       break;
     case 'telemetry': applyTelemetry(msg); break;
+    case 'esp32_log': appendDebugLog(msg.msg); break;
+    case 'ota_progress':
+      document.getElementById('ota-bar').style.width = msg.percent + '%';
+      document.getElementById('ota-status').textContent = 'ESP32: ' + msg.percent + '%';
+      break;
   }
 }
 
 // ─── Lecture audio PCM16 ──────────────────────────────────────────────────────
+let assistantMuted = false;
+
+function toggleMute() {
+  assistantMuted = !assistantMuted;
+  document.getElementById('mute-btn').textContent = assistantMuted ? '🔇' : '🔊';
+  if (assistantMuted) { audioQueue.length = 0; isPlayingAudio = false; }
+}
+
 function enqueueAudio(base64) {
+  if (assistantMuted) return;
   audioQueue.push(base64);
   if (!isPlayingAudio) playNextAudio();
 }
@@ -913,6 +972,13 @@ function fetchStatus() {
       document.getElementById('mode-badge').textContent = s.mode.toUpperCase();
       setDot('dot-ai', s.openai_connected || s.mode === 'local' ? 'on' : 'warn');
       setDot('dot-ws', s.scooter_connected ? 'on' : 'err');
+      const fwEl = document.getElementById('fw-version');
+      if (fwEl) fwEl.textContent = s.fw_version ? 'FW ' + s.fw_version : '';
+      const otaInstalled = document.getElementById('ota-installed');
+      if (otaInstalled) otaInstalled.textContent = s.fw_version || '—';
+      // Sync debug button state
+      esp32Debug = !!s.debug;
+      updateDebugBtn();
     })
     .catch(() => {});
 }
@@ -1006,6 +1072,244 @@ function sendAudioChunk(pcm16) {
   authFetch('/audio', {
     method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: pcm16
   }).catch(console.error);
+}
+
+// ─── Monitor micro ESP32 (écoute en direct via WebSocket) ─────────────────────
+let monitorWs = null;
+let monitorCtx = null;
+let monitorActive = false;
+let monitorNextTime = 0;        // quand planifier le prochain chunk
+const MONITOR_JITTER_MS = 0.25; // buffer de jitter en secondes (250 ms)
+
+function toggleMonitor() {
+  if (monitorActive) stopMonitor(); else startMonitor();
+}
+
+function startMonitor() {
+  monitorCtx = new AudioContext({ sampleRate: 16000 });
+  monitorNextTime = 0;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  monitorWs = new WebSocket(proto + '//' + location.host + '/ws-debug-audio');
+  monitorWs.binaryType = 'arraybuffer';
+  monitorWs.onopen = () => {
+    monitorActive = true;
+    updateMonitorBtns();
+    addLog('system', 'Monitor micro ESP32 actif');
+  };
+  monitorWs.onclose = () => { stopMonitor(); };
+  monitorWs.onmessage = (e) => {
+    if (!monitorCtx) return;
+    const pcm16 = new Int16Array(e.data);
+    const buf = monitorCtx.createBuffer(1, pcm16.length, 16000);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < pcm16.length; i++) ch[i] = pcm16[i] / 32768;
+
+    const now = monitorCtx.currentTime;
+    // Premier chunk ou retard trop grand → resync avec buffer de jitter
+    if (monitorNextTime < now) {
+      monitorNextTime = now + MONITOR_JITTER_MS;
+    }
+
+    const src = monitorCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(monitorCtx.destination);
+    src.start(monitorNextTime);
+    monitorNextTime += buf.duration;
+  };
+}
+
+function stopMonitor() {
+  monitorActive = false;
+  if (monitorWs) { monitorWs.close(); monitorWs = null; }
+  if (monitorCtx) { monitorCtx.close(); monitorCtx = null; }
+  updateMonitorBtns();
+}
+
+function updateMonitorBtns() {
+  ['monitor-btn-desktop', 'monitor-btn-mobile'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    if (monitorActive) {
+      btn.style.background = 'rgba(63,185,80,0.15)';
+      btn.style.color = 'var(--green)';
+      btn.style.borderColor = 'var(--green)';
+      btn.textContent = '🔊 Monitor ON';
+    } else {
+      btn.style.background = 'var(--surface)';
+      btn.style.color = 'var(--muted)';
+      btn.style.borderColor = 'var(--border)';
+      btn.textContent = '🔊 Monitor';
+    }
+  });
+}
+
+// ─── Debug ESP32 ─────────────────────────────────────────────────────────────
+let esp32Debug = false;
+
+function toggleDebug() {
+  esp32Debug = !esp32Debug;
+  authFetch('/debug', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: esp32Debug })
+  }).catch(console.error);
+  updateDebugBtn();
+}
+
+function updateDebugBtn() {
+  const btn = document.getElementById('debug-btn');
+  if (!btn) return;
+  btn.style.background = esp32Debug ? 'rgba(63,185,80,0.2)' : '';
+  btn.style.color = esp32Debug ? 'var(--green)' : '';
+  // Show/hide debug modal
+  const modal = document.getElementById('debug-modal');
+  if (modal) modal.style.display = esp32Debug ? 'flex' : 'none';
+  // Update version in modal
+  const fwEl = document.getElementById('modal-fw-version');
+  const fwMain = document.getElementById('fw-version');
+  if (fwEl && fwMain) fwEl.textContent = fwMain.textContent;
+}
+
+let debugPaused = false;
+
+function toggleDebugPause() {
+  debugPaused = !debugPaused;
+  const btn = document.getElementById('debug-pause-btn');
+  if (btn) {
+    btn.textContent = debugPaused ? '\u25b6' : '\u23f8';
+    btn.style.color = debugPaused ? 'var(--yellow)' : 'var(--muted)';
+  }
+}
+
+function appendDebugLog(msg) {
+  const el = document.getElementById('debug-log');
+  if (!el) return;
+  const line = document.createElement('div');
+  line.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+  el.appendChild(line);
+  while (el.children.length > 500) el.removeChild(el.firstChild);
+  if (!debugPaused) el.scrollTop = el.scrollHeight;
+}
+
+// ─── Upload firmware OTA depuis la page ──────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  const fwFile = document.getElementById('fw-file');
+  if (fwFile) fwFile.addEventListener('change', () => {
+    const btn = document.getElementById('ota-upload-btn');
+    if (btn) btn.disabled = !fwFile.files.length;
+  });
+});
+
+async function uploadFirmware() {
+  const fwFile = document.getElementById('fw-file');
+  if (!fwFile || !fwFile.files.length) return;
+  const file = fwFile.files[0];
+  const statusEl = document.getElementById('ota-status');
+  const barEl = document.getElementById('ota-bar');
+  const btn = document.getElementById('ota-upload-btn');
+
+  statusEl.textContent = 'Upload en cours...';
+  barEl.style.width = '0';
+  btn.disabled = true;
+
+  try {
+    const r = await authFetch('/ota', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: await file.arrayBuffer()
+    });
+    const data = await r.json();
+    if (r.ok) {
+      statusEl.textContent = data.message || 'Firmware flash\u00e9 !';
+      barEl.style.width = '100%';
+      // Refresh status after reboot
+      setTimeout(fetchStatus, 8000);
+    } else {
+      statusEl.textContent = 'Erreur: ' + (data.error || r.status);
+      barEl.style.background = 'var(--red)';
+    }
+  } catch (err) {
+    statusEl.textContent = 'Erreur: ' + err.message;
+  }
+  btn.disabled = false;
+}
+
+// ─── Mise a jour firmware depuis GitHub Releases ─────────────────────────────
+let latestRelease = null;
+
+async function checkFirmwareUpdate() {
+  const statusEl = document.getElementById('ota-status');
+  const availEl = document.getElementById('ota-available');
+  const badgeEl = document.getElementById('ota-update-badge');
+  const ghBtn = document.getElementById('ota-github-btn');
+  const checkBtn = document.getElementById('ota-check-btn');
+
+  statusEl.textContent = 'Vérification...';
+  checkBtn.disabled = true;
+
+  try {
+    const r = await authFetch('/api/releases/latest');
+    if (!r.ok) {
+      const data = await r.json();
+      throw new Error(data.error || 'Erreur ' + r.status);
+    }
+    latestRelease = await r.json();
+    availEl.textContent = latestRelease.version;
+
+    const installedEl = document.getElementById('ota-installed');
+    const installed = installedEl ? installedEl.textContent : '—';
+
+    if (installed !== '—' && latestRelease.version !== installed) {
+      badgeEl.style.display = 'inline';
+      ghBtn.disabled = false;
+      statusEl.textContent = 'Nouvelle version disponible !';
+    } else if (installed === latestRelease.version) {
+      badgeEl.style.display = 'none';
+      ghBtn.disabled = true;
+      statusEl.textContent = 'Firmware à jour.';
+    } else {
+      ghBtn.disabled = !latestRelease.download_url;
+      statusEl.textContent = '';
+    }
+  } catch (err) {
+    statusEl.textContent = 'Erreur: ' + err.message;
+    availEl.textContent = '—';
+    badgeEl.style.display = 'none';
+    ghBtn.disabled = true;
+  }
+  checkBtn.disabled = false;
+}
+
+async function flashFromGitHub() {
+  if (!latestRelease) return;
+
+  const statusEl = document.getElementById('ota-status');
+  const barEl = document.getElementById('ota-bar');
+  const ghBtn = document.getElementById('ota-github-btn');
+
+  statusEl.textContent = 'Téléchargement et flash en cours...';
+  barEl.style.width = '0';
+  barEl.style.background = 'var(--green)';
+  ghBtn.disabled = true;
+
+  try {
+    const r = await authFetch('/api/ota/github', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await r.json();
+    if (r.ok) {
+      statusEl.textContent = data.message || 'Firmware flashé !';
+      barEl.style.width = '100%';
+      setTimeout(fetchStatus, 8000);
+    } else {
+      statusEl.textContent = 'Erreur: ' + (data.error || r.status);
+      barEl.style.background = 'var(--red)';
+    }
+  } catch (err) {
+    statusEl.textContent = 'Erreur: ' + err.message;
+    barEl.style.background = 'var(--red)';
+  }
+  ghBtn.disabled = false;
 }
 
 // Attacher les événements aux deux boutons PTT
