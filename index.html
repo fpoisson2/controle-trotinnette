@@ -917,7 +917,10 @@ function handleSSEMessage(msg) {
     case 'esp32_log': appendDebugLog(msg.msg); break;
     case 'ota_progress':
       document.getElementById('ota-bar').style.width = msg.percent + '%';
-      document.getElementById('ota-status').textContent = 'ESP32: ' + msg.percent + '%';
+      document.getElementById('ota-status').textContent = 'Flash ESP32: ' + msg.percent + '%';
+      break;
+    case 'ota_build':
+      handleBuildEvent(msg);
       break;
   }
 }
@@ -1236,6 +1239,16 @@ async function uploadFirmware() {
 // ─── Mise a jour firmware depuis GitHub Releases ─────────────────────────────
 let latestRelease = null;
 
+// Compare deux versions "AAAA.MM.XX" — retourne >0 si a > b
+function compareVersions(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+  }
+  return 0;
+}
+
 async function checkFirmwareUpdate() {
   const statusEl = document.getElementById('ota-status');
   const availEl = document.getElementById('ota-available');
@@ -1258,16 +1271,18 @@ async function checkFirmwareUpdate() {
     const installedEl = document.getElementById('ota-installed');
     const installed = installedEl ? installedEl.textContent : '—';
 
-    if (installed !== '—' && latestRelease.version !== installed) {
+    if (installed !== '—' && compareVersions(latestRelease.version, installed) > 0) {
       badgeEl.style.display = 'inline';
       ghBtn.disabled = false;
       statusEl.textContent = 'Nouvelle version disponible !';
-    } else if (installed === latestRelease.version) {
+    } else if (installed !== '—' && compareVersions(latestRelease.version, installed) <= 0) {
       badgeEl.style.display = 'none';
       ghBtn.disabled = true;
       statusEl.textContent = 'Firmware à jour.';
     } else {
+      // ESP32 non connecté — on ne connaît pas la version installée
       ghBtn.disabled = false;
+      badgeEl.style.display = 'none';
       statusEl.textContent = '';
     }
   } catch (err) {
@@ -1279,6 +1294,31 @@ async function checkFirmwareUpdate() {
   checkBtn.disabled = false;
 }
 
+function handleBuildEvent(msg) {
+  const statusEl = document.getElementById('ota-status');
+  const barEl = document.getElementById('ota-bar');
+  const ghBtn = document.getElementById('ota-github-btn');
+
+  statusEl.textContent = msg.msg || '';
+
+  if (msg.step === 'compile' && msg.percent != null) {
+    barEl.style.background = 'var(--accent)';
+    barEl.style.width = msg.percent + '%';
+  } else if (msg.step === 'flash') {
+    barEl.style.background = 'var(--green)';
+    barEl.style.width = '0';
+  } else if (msg.step === 'success') {
+    barEl.style.background = 'var(--green)';
+    barEl.style.width = '100%';
+    if (ghBtn) ghBtn.disabled = false;
+    setTimeout(fetchStatus, 8000);
+  } else if (msg.step === 'error') {
+    barEl.style.background = 'var(--red)';
+    statusEl.textContent = 'Erreur: ' + msg.msg;
+    if (ghBtn) ghBtn.disabled = false;
+  }
+}
+
 async function flashFromGitHub() {
   if (!latestRelease) return;
 
@@ -1286,9 +1326,9 @@ async function flashFromGitHub() {
   const barEl = document.getElementById('ota-bar');
   const ghBtn = document.getElementById('ota-github-btn');
 
-  statusEl.textContent = 'Compilation et flash en cours...';
+  statusEl.textContent = 'Lancement du build...';
   barEl.style.width = '0';
-  barEl.style.background = 'var(--green)';
+  barEl.style.background = 'var(--accent)';
   ghBtn.disabled = true;
 
   try {
@@ -1297,19 +1337,17 @@ async function flashFromGitHub() {
       headers: { 'Content-Type': 'application/json' }
     });
     const data = await r.json();
-    if (r.ok) {
-      statusEl.textContent = data.message || 'Firmware flashé !';
-      barEl.style.width = '100%';
-      setTimeout(fetchStatus, 8000);
-    } else {
+    if (!r.ok) {
       statusEl.textContent = 'Erreur: ' + (data.error || r.status);
       barEl.style.background = 'var(--red)';
+      ghBtn.disabled = false;
     }
+    // Si ok, la progression arrive via SSE (ota_build events)
   } catch (err) {
     statusEl.textContent = 'Erreur: ' + err.message;
     barEl.style.background = 'var(--red)';
+    ghBtn.disabled = false;
   }
-  ghBtn.disabled = false;
 }
 
 // Attacher les événements aux deux boutons PTT

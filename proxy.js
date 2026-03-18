@@ -685,6 +685,10 @@ app.get('/api/releases/latest', async (req, res) => {
 
 // Compile le firmware depuis le source GitHub + config.h local
 // Retourne le Buffer du .bin compilé
+const { spawn } = require('child_process');
+
+let buildInProgress = false;
+
 async function buildFirmwareFromRelease(release) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-build-'));
   const tarball = path.join(tmpDir, 'source.tar.gz');
@@ -692,6 +696,7 @@ async function buildFirmwareFromRelease(release) {
 
   try {
     // Télécharger le tarball source
+    broadcastSSE({ type: 'ota_build', step: 'download', msg: 'Téléchargement du source...' });
     console.log(`[build] téléchargement source ${release.tag}...`);
     const resp = await fetch(release.tarball_url, {
       headers: { 'User-Agent': 'trottinette-proxy' },
@@ -702,6 +707,7 @@ async function buildFirmwareFromRelease(release) {
     fs.writeFileSync(tarball, buf);
 
     // Extraire
+    broadcastSSE({ type: 'ota_build', step: 'extract', msg: 'Extraction...' });
     execSync(`tar xzf source.tar.gz`, { cwd: tmpDir });
 
     // Trouver le répertoire extrait (GitHub le nomme owner-repo-sha/)
@@ -728,12 +734,43 @@ async function buildFirmwareFromRelease(release) {
     );
     fs.writeFileSync(configPath, configContent);
 
-    // Build avec PlatformIO
+    // Build avec PlatformIO (spawn pour streamer la sortie)
+    broadcastSSE({ type: 'ota_build', step: 'compile', msg: 'Compilation PlatformIO...' });
     console.log('[build] compilation PlatformIO...');
-    execSync('pio run -e esp32dev', {
-      cwd: srcDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 300000 // 5 min max
+
+    await new Promise((resolve, reject) => {
+      const proc = spawn('pio', ['run', '-e', 'esp32dev'], {
+        cwd: srcDir,
+        timeout: 300000
+      });
+
+      let lastPct = 0;
+      proc.stdout.on('data', (data) => {
+        const line = data.toString().trim();
+        if (!line) return;
+        // PlatformIO affiche [XX%] pendant la compilation
+        const pctMatch = line.match(/\[(\d+)%\]/);
+        if (pctMatch) {
+          const pct = parseInt(pctMatch[1]);
+          if (pct > lastPct) {
+            lastPct = pct;
+            broadcastSSE({ type: 'ota_build', step: 'compile', percent: pct, msg: `Compilation: ${pct}%` });
+          }
+        }
+        console.log(`[build] ${line}`);
+      });
+
+      proc.stderr.on('data', (data) => {
+        const line = data.toString().trim();
+        if (line) console.log(`[build] ${line}`);
+      });
+
+      proc.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`PlatformIO exit code ${code}`));
+      });
+
+      proc.on('error', reject);
     });
 
     // Lire le .bin résultant
@@ -742,33 +779,47 @@ async function buildFirmwareFromRelease(release) {
 
     const firmware = fs.readFileSync(binPath);
     console.log(`[build] compilation réussie — ${firmware.length} bytes`);
+    broadcastSSE({ type: 'ota_build', step: 'done', msg: `Compilation terminée (${(firmware.length / 1024).toFixed(0)} Ko)` });
     return firmware;
   } finally {
-    // Nettoyage
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 
-// POST /api/ota/github — télécharge le source, compile localement, flashe l'ESP32
+// POST /api/ota/github — lance le build + flash en arrière-plan, retourne immédiatement
 app.post('/api/ota/github', async (req, res) => {
+  if (buildInProgress) return res.status(409).json({ error: 'Build déjà en cours' });
+  if (otaInProgress) return res.status(409).json({ error: 'OTA déjà en cours' });
+
+  let release;
   try {
-    const release = await fetchLatestRelease();
+    release = await fetchLatestRelease();
     if (!release) return res.status(404).json({ error: 'Aucune release trouvée' });
-
-    console.log(`[ota-github] build + flash version ${release.version}...`);
-    broadcastSSE({ type: 'ota_progress', percent: 0 });
-
-    const firmware = await buildFirmwareFromRelease(release);
-    broadcastSSE({ type: 'ota_progress', percent: 10 });
-
-    const result = await flashFirmware(firmware);
-    res.json({ ...result, version: release.version });
   } catch (err) {
-    const status = err.message.includes('non connecté') ? 503
-                 : err.message.includes('déjà en cours') ? 409
-                 : err.message.includes('Timeout') ? 504 : 500;
-    res.status(status).json({ error: err.message });
+    return res.status(502).json({ error: err.message });
   }
+
+  // Répondre immédiatement — le reste se fait en arrière-plan
+  buildInProgress = true;
+  res.json({ ok: true, message: `Build ${release.version} lancé` });
+
+  // Arrière-plan : build → flash → broadcast résultat
+  (async () => {
+    try {
+      console.log(`[ota-github] build + flash version ${release.version}...`);
+      const firmware = await buildFirmwareFromRelease(release);
+
+      broadcastSSE({ type: 'ota_build', step: 'flash', msg: 'Flash OTA en cours...' });
+      await flashFirmware(firmware);
+
+      broadcastSSE({ type: 'ota_build', step: 'success', msg: `Firmware ${release.version} flashé — redémarrage ESP32` });
+    } catch (err) {
+      console.error('[ota-github] erreur :', err.message);
+      broadcastSSE({ type: 'ota_build', step: 'error', msg: err.message });
+    } finally {
+      buildInProgress = false;
+    }
+  })();
 });
 
 // ─── Debug audio : écouter le micro ESP32 depuis le navigateur ────────────────
