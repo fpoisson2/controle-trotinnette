@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'firmware/**'
+      - 'proxy.js'
+      - 'index.html'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -54,5 +59,6 @@ jobs:
           body: |
             Version `${{ steps.version.outputs.version }}`
 
-            Le firmware est compilé localement par le proxy avec le `config.h` du serveur.
-            Mettre à jour depuis le dashboard web → Debug → Mise à jour firmware.
+            Le firmware est compile automatiquement par le serveur de production avec le `config.h` local.
+            Le build demarre en arriere-plan des la detection de cette release.
+            Mettre a jour depuis le dashboard web → Debug → Mise a jour firmware.

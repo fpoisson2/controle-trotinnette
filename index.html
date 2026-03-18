@@ -664,7 +664,15 @@
         <button class="btn" id="ota-check-btn" onclick="checkFirmwareUpdate()" style="padding:6px 12px;font-size:12px;background:var(--surface);border:1px solid var(--border);color:var(--text);cursor:pointer;border-radius:var(--radius)">Verifier les mises a jour</button>
         <button class="btn forward" id="ota-github-btn" onclick="flashFromGitHub()" disabled style="padding:6px 16px;font-size:12px">Mettre a jour</button>
       </div>
+      <!-- Rollback : sélecteur de version -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <select id="ota-release-select" style="flex:1;padding:4px 8px;font-size:12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius)">
+          <option value="">-- Rollback vers une version --</option>
+        </select>
+        <button class="btn" id="ota-rollback-btn" onclick="flashSelectedVersion()" disabled style="padding:6px 12px;font-size:12px;background:var(--surface);border:1px solid var(--border);color:var(--text);cursor:pointer;border-radius:var(--radius)">Flasher</button>
+      </div>
       <div id="ota-status" style="margin-top:6px;font-size:11px;color:var(--muted)"></div>
+      <div id="ota-sha256" style="font-size:10px;color:var(--muted);margin-top:2px;word-break:break-all;display:none"></div>
       <div style="width:100%;height:4px;background:var(--border);border-radius:2px;margin-top:4px">
         <div id="ota-bar" style="height:100%;background:var(--green);border-radius:2px;width:0;transition:width 0.3s"></div>
       </div>
@@ -1268,23 +1276,41 @@ async function checkFirmwareUpdate() {
     latestRelease = await r.json();
     availEl.textContent = latestRelease.version;
 
+    // Indiquer si le build est prêt
+    if (latestRelease.build_ready) {
+      availEl.textContent += ' (prêt)';
+    } else {
+      availEl.textContent += ' (compilation...)';
+    }
+
     const installedEl = document.getElementById('ota-installed');
     const installed = installedEl ? installedEl.textContent : '—';
 
     if (installed !== '—' && compareVersions(latestRelease.version, installed) > 0) {
       badgeEl.style.display = 'inline';
       ghBtn.disabled = false;
-      statusEl.textContent = 'Nouvelle version disponible !';
+      statusEl.textContent = latestRelease.build_ready
+        ? 'Nouvelle version prête à flasher !'
+        : 'Nouvelle version disponible (compilation en cours sur le serveur)';
     } else if (installed !== '—' && compareVersions(latestRelease.version, installed) <= 0) {
       badgeEl.style.display = 'none';
       ghBtn.disabled = true;
       statusEl.textContent = 'Firmware à jour.';
     } else {
-      // ESP32 non connecté — on ne connaît pas la version installée
       ghBtn.disabled = false;
       badgeEl.style.display = 'none';
       statusEl.textContent = '';
     }
+
+    // Afficher le SHA256 si disponible
+    if (latestRelease.sha256) {
+      const sha256El = document.getElementById('ota-sha256');
+      sha256El.textContent = 'SHA256: ' + latestRelease.sha256;
+      sha256El.style.display = 'block';
+    }
+
+    // Charger la liste des releases pour le rollback
+    loadReleasesList();
   } catch (err) {
     statusEl.textContent = 'Erreur: ' + err.message;
     availEl.textContent = '—';
@@ -1294,12 +1320,77 @@ async function checkFirmwareUpdate() {
   checkBtn.disabled = false;
 }
 
+async function loadReleasesList() {
+  const select = document.getElementById('ota-release-select');
+  const rollbackBtn = document.getElementById('ota-rollback-btn');
+  try {
+    const r = await authFetch('/api/releases');
+    if (!r.ok) return;
+    const releases = await r.json();
+    select.innerHTML = '<option value="">-- Rollback vers une version --</option>';
+    for (const rel of releases) {
+      const opt = document.createElement('option');
+      opt.value = rel.version;
+      const readyTag = rel.build_ready ? ' [prêt]' : '';
+      opt.textContent = `v${rel.version} (${new Date(rel.published_at).toLocaleDateString('fr-FR')})${readyTag}`;
+      select.appendChild(opt);
+    }
+    select.onchange = () => { rollbackBtn.disabled = !select.value; };
+  } catch (_) {}
+}
+
+async function flashSelectedVersion() {
+  const select = document.getElementById('ota-release-select');
+  const version = select.value;
+  if (!version) return;
+
+  const statusEl = document.getElementById('ota-status');
+  const barEl = document.getElementById('ota-bar');
+  const rollbackBtn = document.getElementById('ota-rollback-btn');
+  const ghBtn = document.getElementById('ota-github-btn');
+
+  statusEl.textContent = `Flash v${version}...`;
+  barEl.style.width = '0';
+  barEl.style.background = 'var(--accent)';
+  rollbackBtn.disabled = true;
+  if (ghBtn) ghBtn.disabled = true;
+
+  try {
+    const r = await authFetch('/api/ota/flash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version })
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      statusEl.textContent = 'Erreur: ' + (data.error || r.status);
+      barEl.style.background = 'var(--red)';
+      rollbackBtn.disabled = false;
+      if (ghBtn) ghBtn.disabled = false;
+    }
+    // Si ok, la progression arrive via SSE (ota_build events)
+  } catch (err) {
+    statusEl.textContent = 'Erreur: ' + err.message;
+    barEl.style.background = 'var(--red)';
+    rollbackBtn.disabled = false;
+    if (ghBtn) ghBtn.disabled = false;
+  }
+}
+
 function handleBuildEvent(msg) {
   const statusEl = document.getElementById('ota-status');
   const barEl = document.getElementById('ota-bar');
   const ghBtn = document.getElementById('ota-github-btn');
+  const sha256El = document.getElementById('ota-sha256');
+  const rollbackBtn = document.getElementById('ota-rollback-btn');
 
   statusEl.textContent = msg.msg || '';
+
+  // Afficher le SHA256 si présent
+  if (msg.sha256) {
+    sha256El.textContent = 'SHA256: ' + msg.sha256;
+    sha256El.style.display = 'block';
+  }
 
   if (msg.step === 'compile' && msg.percent != null) {
     barEl.style.background = 'var(--accent)';
@@ -1311,11 +1402,13 @@ function handleBuildEvent(msg) {
     barEl.style.background = 'var(--green)';
     barEl.style.width = '100%';
     if (ghBtn) ghBtn.disabled = false;
+    if (rollbackBtn) rollbackBtn.disabled = false;
     setTimeout(fetchStatus, 8000);
   } else if (msg.step === 'error') {
     barEl.style.background = 'var(--red)';
     statusEl.textContent = 'Erreur: ' + msg.msg;
     if (ghBtn) ghBtn.disabled = false;
+    if (rollbackBtn) rollbackBtn.disabled = false;
   }
 }
 
@@ -1326,15 +1419,16 @@ async function flashFromGitHub() {
   const barEl = document.getElementById('ota-bar');
   const ghBtn = document.getElementById('ota-github-btn');
 
-  statusEl.textContent = 'Lancement du build...';
+  statusEl.textContent = latestRelease.build_ready ? 'Flash en cours...' : 'Compilation + flash...';
   barEl.style.width = '0';
   barEl.style.background = 'var(--accent)';
   ghBtn.disabled = true;
 
   try {
-    const r = await authFetch('/api/ota/github', {
+    const r = await authFetch('/api/ota/flash', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: latestRelease.version })
     });
     const data = await r.json();
     if (!r.ok) {

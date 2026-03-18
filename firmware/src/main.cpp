@@ -215,6 +215,12 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                     // Réinstaller I2S
                     audioInitI2S();
                 } else {
+                    // Vérification d'intégrité MD5 si fourni par le proxy
+                    const char* md5 = doc["md5"] | (const char*)nullptr;
+                    if (md5 && strlen(md5) == 32) {
+                        Update.setMD5(md5);
+                        wsLog("[ota] vérification MD5 activée : %s\n", md5);
+                    }
                     otaMode = true;
                 }
             } else if (strcmp(evtype, "ota_end") == 0) {

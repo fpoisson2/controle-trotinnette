@@ -6,6 +6,10 @@ services:
     restart: unless-stopped
     networks:
       - trottinette_net
+    volumes:
+      - pio-cache:/root/.platformio
+      - ./firmware/include/config.h:/app/firmware/include/config.h:ro
+      - builds:/app/builds
     # Port exposé uniquement pour debug local — commenter en production
     # ports:
     #   - "3000:3000"
@@ -24,3 +28,7 @@ services:
 networks:
   trottinette_net:
     driver: bridge
+
+volumes:
+  pio-cache:
+  builds:

@@ -18,6 +18,9 @@ COPY package.json .
 RUN npm install
 COPY proxy.js .
 COPY index.html .
-COPY firmware/include/config.h firmware/include/config.h
+# config.h est monté en volume via docker-compose.yml
+RUN mkdir -p firmware/include
+# Répertoire pour stocker les .bin pré-compilés
+RUN mkdir -p builds
 
 CMD ["node", "proxy.js"]

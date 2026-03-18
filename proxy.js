@@ -7,7 +7,8 @@ const http     = require('http');
 const WebSocket = require('ws');
 const path     = require('path');
 const fs       = require('fs');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
+const crypto   = require('crypto');
 const os       = require('os');
 const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
@@ -578,10 +579,11 @@ function flashFirmware(firmware) {
       return reject(new Error('Firmware invalide (trop petit ou pas un Buffer)'));
     }
 
-    console.log(`[ota] envoi firmware ${firmware.length} bytes à l'ESP32`);
+    const md5 = crypto.createHash('md5').update(firmware).digest('hex');
+    console.log(`[ota] envoi firmware ${firmware.length} bytes à l'ESP32 — MD5: ${md5}`);
     otaInProgress = true;
 
-    esp32Ws.send(JSON.stringify({ type: 'ota_begin', size: firmware.length }));
+    esp32Ws.send(JSON.stringify({ type: 'ota_begin', size: firmware.length, md5 }));
 
     const CHUNK = 1024;
     let offset = 0;
@@ -627,7 +629,11 @@ function flashFirmware(firmware) {
 // POST /ota — upload manuel .bin
 app.post('/ota', async (req, res) => {
   try {
+    const sha256 = crypto.createHash('sha256').update(req.body).digest('hex');
+    console.log(`[ota] upload manuel — ${req.body.length} bytes — SHA256: ${sha256}`);
+    broadcastSSE({ type: 'ota_build', step: 'flash', msg: `Flash OTA (${(req.body.length / 1024).toFixed(0)} Ko)`, sha256 });
     const result = await flashFirmware(req.body);
+    result.sha256 = sha256;
     res.json(result);
   } catch (err) {
     const status = err.message.includes('non connecté') ? 503
@@ -638,17 +644,50 @@ app.post('/ota', async (req, res) => {
   }
 });
 
-// ─── GitHub Releases API — compilation locale ────────────────────────────────
+// ─── GitHub Releases + pré-compilation automatique ──────────────────────────
 const GITHUB_REPO = 'fpoisson2/controle-trotinnette';
-let releaseCache = { data: null, ts: 0 };
-const RELEASE_CACHE_MS = 5 * 60 * 1000; // 5 minutes
+const BUILDS_DIR  = path.join(__dirname, 'builds');
+const POLL_INTERVAL_MS = 5 * 60 * 1000; // vérifier toutes les 5 minutes
+let buildInProgress = false;
+
+// Charger l'index des builds déjà compilés depuis le disque
+// Format : builds/<version>.json  = { version, sha256, size, built_at }
+//          builds/<version>.bin   = le firmware
+function getLocalBuilds() {
+  if (!fs.existsSync(BUILDS_DIR)) fs.mkdirSync(BUILDS_DIR, { recursive: true });
+  const files = fs.readdirSync(BUILDS_DIR).filter(f => f.endsWith('.json'));
+  return files.map(f => {
+    try { return JSON.parse(fs.readFileSync(path.join(BUILDS_DIR, f), 'utf8')); }
+    catch (_) { return null; }
+  }).filter(Boolean).sort((a, b) => b.version.localeCompare(a.version));
+}
+
+function getBuild(version) {
+  const metaPath = path.join(BUILDS_DIR, `${version}.json`);
+  const binPath  = path.join(BUILDS_DIR, `${version}.bin`);
+  if (!fs.existsSync(metaPath) || !fs.existsSync(binPath)) return null;
+  const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  return { ...meta, binPath };
+}
+
+// Récupérer les releases depuis GitHub
+async function fetchGitHubReleases(count = 10) {
+  const url = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=${count}`;
+  const resp = await fetch(url, {
+    headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'trottinette-proxy' }
+  });
+  if (!resp.ok) throw new Error(`GitHub API ${resp.status}: ${resp.statusText}`);
+  const releases = await resp.json();
+  return releases.map(r => ({
+    version: r.tag_name.replace(/^v/, ''),
+    tag: r.tag_name,
+    published_at: r.published_at,
+    tarball_url: r.tarball_url,
+    body: r.body || ''
+  }));
+}
 
 async function fetchLatestRelease() {
-  const now = Date.now();
-  if (releaseCache.data && (now - releaseCache.ts) < RELEASE_CACHE_MS) {
-    return releaseCache.data;
-  }
-
   const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
   const resp = await fetch(url, {
     headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'trottinette-proxy' }
@@ -657,46 +696,34 @@ async function fetchLatestRelease() {
     if (resp.status === 404) return null;
     throw new Error(`GitHub API ${resp.status}: ${resp.statusText}`);
   }
-
   const release = await resp.json();
-  const result = {
+  return {
     version: release.tag_name.replace(/^v/, ''),
     tag: release.tag_name,
     published_at: release.published_at,
     tarball_url: release.tarball_url,
     body: release.body || ''
   };
-
-  releaseCache = { data: result, ts: now };
-  return result;
 }
 
-// GET /api/releases/latest
-app.get('/api/releases/latest', async (req, res) => {
-  try {
-    const release = await fetchLatestRelease();
-    if (!release) return res.status(404).json({ error: 'Aucune release trouvée' });
-    res.json(release);
-  } catch (err) {
-    console.error('[github] erreur fetch release :', err.message);
-    res.status(502).json({ error: 'Impossible de contacter GitHub : ' + err.message });
+// Compiler une release et stocker le .bin sur disque
+async function buildAndStoreRelease(release) {
+  if (buildInProgress) {
+    console.log(`[build] build déjà en cours, skip ${release.version}`);
+    return null;
   }
-});
+  // Déjà compilé ?
+  const existing = getBuild(release.version);
+  if (existing) return existing;
 
-// Compile le firmware depuis le source GitHub + config.h local
-// Retourne le Buffer du .bin compilé
-const { spawn } = require('child_process');
-
-let buildInProgress = false;
-
-async function buildFirmwareFromRelease(release) {
+  buildInProgress = true;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-build-'));
   const tarball = path.join(tmpDir, 'source.tar.gz');
   const localConfigH = path.join(__dirname, 'firmware', 'include', 'config.h');
 
   try {
     // Télécharger le tarball source
-    broadcastSSE({ type: 'ota_build', step: 'download', msg: 'Téléchargement du source...' });
+    broadcastSSE({ type: 'ota_build', step: 'download', msg: `Téléchargement v${release.version}...` });
     console.log(`[build] téléchargement source ${release.tag}...`);
     const resp = await fetch(release.tarball_url, {
       headers: { 'User-Agent': 'trottinette-proxy' },
@@ -710,7 +737,6 @@ async function buildFirmwareFromRelease(release) {
     broadcastSSE({ type: 'ota_build', step: 'extract', msg: 'Extraction...' });
     execSync(`tar xzf source.tar.gz`, { cwd: tmpDir });
 
-    // Trouver le répertoire extrait (GitHub le nomme owner-repo-sha/)
     const extracted = fs.readdirSync(tmpDir).find(f =>
       f !== 'source.tar.gz' && fs.statSync(path.join(tmpDir, f)).isDirectory()
     );
@@ -719,13 +745,13 @@ async function buildFirmwareFromRelease(release) {
 
     if (!fs.existsSync(srcDir)) throw new Error('Répertoire firmware/ introuvable dans le source');
 
-    // Copier le config.h local (contient WiFi, EAP, proxy, OTA)
+    // Copier le config.h local
     if (!fs.existsSync(localConfigH)) {
       throw new Error('config.h local introuvable — nécessaire pour la compilation');
     }
     fs.copyFileSync(localConfigH, path.join(srcDir, 'include', 'config.h'));
 
-    // Injecter la version du tag dans config.h
+    // Injecter la version dans config.h
     const configPath = path.join(srcDir, 'include', 'config.h');
     let configContent = fs.readFileSync(configPath, 'utf8');
     configContent = configContent.replace(
@@ -734,9 +760,9 @@ async function buildFirmwareFromRelease(release) {
     );
     fs.writeFileSync(configPath, configContent);
 
-    // Build avec PlatformIO (spawn pour streamer la sortie)
-    broadcastSSE({ type: 'ota_build', step: 'compile', msg: 'Compilation PlatformIO...' });
-    console.log('[build] compilation PlatformIO...');
+    // Compiler avec PlatformIO
+    broadcastSSE({ type: 'ota_build', step: 'compile', msg: `Compilation v${release.version}...` });
+    console.log(`[build] compilation v${release.version}...`);
 
     await new Promise((resolve, reject) => {
       const proc = spawn('pio', ['run', '-e', 'esp32dev'], {
@@ -748,13 +774,12 @@ async function buildFirmwareFromRelease(release) {
       proc.stdout.on('data', (data) => {
         const line = data.toString().trim();
         if (!line) return;
-        // PlatformIO affiche [XX%] pendant la compilation
         const pctMatch = line.match(/\[(\d+)%\]/);
         if (pctMatch) {
           const pct = parseInt(pctMatch[1]);
           if (pct > lastPct) {
             lastPct = pct;
-            broadcastSSE({ type: 'ota_build', step: 'compile', percent: pct, msg: `Compilation: ${pct}%` });
+            broadcastSSE({ type: 'ota_build', step: 'compile', percent: pct, msg: `Compilation v${release.version}: ${pct}%` });
           }
         }
         console.log(`[build] ${line}`);
@@ -773,53 +798,180 @@ async function buildFirmwareFromRelease(release) {
       proc.on('error', reject);
     });
 
-    // Lire le .bin résultant
-    const binPath = path.join(srcDir, '.pio', 'build', 'esp32dev', 'firmware.bin');
-    if (!fs.existsSync(binPath)) throw new Error('firmware.bin introuvable après compilation');
+    // Lire le .bin et stocker
+    const pioBinPath = path.join(srcDir, '.pio', 'build', 'esp32dev', 'firmware.bin');
+    if (!fs.existsSync(pioBinPath)) throw new Error('firmware.bin introuvable après compilation');
 
-    const firmware = fs.readFileSync(binPath);
-    console.log(`[build] compilation réussie — ${firmware.length} bytes`);
-    broadcastSSE({ type: 'ota_build', step: 'done', msg: `Compilation terminée (${(firmware.length / 1024).toFixed(0)} Ko)` });
-    return firmware;
+    const firmware = fs.readFileSync(pioBinPath);
+    const sha256 = crypto.createHash('sha256').update(firmware).digest('hex');
+
+    // Sauvegarder dans builds/
+    if (!fs.existsSync(BUILDS_DIR)) fs.mkdirSync(BUILDS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(BUILDS_DIR, `${release.version}.bin`), firmware);
+    const meta = {
+      version: release.version,
+      tag: release.tag,
+      sha256,
+      size: firmware.length,
+      built_at: new Date().toISOString(),
+      published_at: release.published_at
+    };
+    fs.writeFileSync(path.join(BUILDS_DIR, `${release.version}.json`), JSON.stringify(meta, null, 2));
+
+    console.log(`[build] v${release.version} compilé — ${firmware.length} bytes — SHA256: ${sha256}`);
+    broadcastSSE({ type: 'ota_build', step: 'ready', msg: `v${release.version} prêt (${(firmware.length / 1024).toFixed(0)} Ko)`, sha256, version: release.version });
+
+    return meta;
+  } catch (err) {
+    console.error(`[build] erreur compilation v${release.version} :`, err.message);
+    broadcastSSE({ type: 'ota_build', step: 'error', msg: `Erreur build v${release.version}: ${err.message}` });
+    return null;
   } finally {
+    buildInProgress = false;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 
-// POST /api/ota/github — lance le build + flash en arrière-plan, retourne immédiatement
-app.post('/api/ota/github', async (req, res) => {
-  if (buildInProgress) return res.status(409).json({ error: 'Build déjà en cours' });
+// Boucle de polling : vérifie les nouvelles releases et compile automatiquement
+async function pollAndBuild() {
+  try {
+    const latest = await fetchLatestRelease();
+    if (!latest) return;
+
+    const existing = getBuild(latest.version);
+    if (!existing) {
+      console.log(`[poll] nouvelle release détectée : v${latest.version} — lancement du build`);
+      await buildAndStoreRelease(latest);
+    }
+  } catch (err) {
+    console.error('[poll] erreur :', err.message);
+  }
+}
+
+// GET /api/releases/latest
+app.get('/api/releases/latest', async (req, res) => {
+  try {
+    const release = await fetchLatestRelease();
+    if (!release) return res.status(404).json({ error: 'Aucune release trouvée' });
+    // Ajouter l'état du build local
+    const build = getBuild(release.version);
+    release.build_ready = !!build;
+    if (build) { release.sha256 = build.sha256; release.size = build.size; }
+    res.json(release);
+  } catch (err) {
+    console.error('[github] erreur fetch release :', err.message);
+    res.status(502).json({ error: 'Impossible de contacter GitHub : ' + err.message });
+  }
+});
+
+// GET /api/releases — liste les releases avec état du build local
+app.get('/api/releases', async (req, res) => {
+  const count = Math.min(parseInt(req.query.count) || 10, 30);
+  try {
+    const releases = await fetchGitHubReleases(count);
+    // Enrichir avec l'état du build local
+    for (const rel of releases) {
+      const build = getBuild(rel.version);
+      rel.build_ready = !!build;
+      if (build) { rel.sha256 = build.sha256; rel.size = build.size; }
+    }
+    res.json(releases);
+  } catch (err) {
+    console.error('[github] erreur fetch releases :', err.message);
+    res.status(502).json({ error: 'Impossible de contacter GitHub : ' + err.message });
+  }
+});
+
+// GET /api/builds — liste uniquement les builds pré-compilés disponibles localement
+app.get('/api/builds', (req, res) => {
+  res.json(getLocalBuilds());
+});
+
+// POST /api/ota/flash — flasher un .bin pré-compilé (ou compiler + flasher si pas encore prêt)
+// Body : { version: "2025.03.01" } — si absent, utilise la dernière release
+app.post('/api/ota/flash', async (req, res) => {
   if (otaInProgress) return res.status(409).json({ error: 'OTA déjà en cours' });
 
-  let release;
+  const targetVersion = req.body?.version;
+  let version;
+
   try {
-    release = await fetchLatestRelease();
-    if (!release) return res.status(404).json({ error: 'Aucune release trouvée' });
+    if (targetVersion) {
+      version = targetVersion;
+    } else {
+      const latest = await fetchLatestRelease();
+      if (!latest) return res.status(404).json({ error: 'Aucune release trouvée' });
+      version = latest.version;
+    }
   } catch (err) {
     return res.status(502).json({ error: err.message });
   }
 
-  // Répondre immédiatement — le reste se fait en arrière-plan
-  buildInProgress = true;
-  res.json({ ok: true, message: `Build ${release.version} lancé` });
+  let build = getBuild(version);
 
-  // Arrière-plan : build → flash → broadcast résultat
+  // Si pas encore compilé, compiler maintenant
+  if (!build) {
+    if (buildInProgress) return res.status(409).json({ error: 'Build en cours pour une autre version' });
+
+    try {
+      // Chercher la release GitHub pour cette version
+      const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/tags/v${version}`;
+      const resp = await fetch(url, {
+        headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'trottinette-proxy' }
+      });
+      if (!resp.ok) return res.status(404).json({ error: `Release v${version} introuvable` });
+      const r = await resp.json();
+      const release = {
+        version: r.tag_name.replace(/^v/, ''),
+        tag: r.tag_name,
+        published_at: r.published_at,
+        tarball_url: r.tarball_url,
+        body: r.body || ''
+      };
+
+      // Répondre immédiatement — compilation + flash en arrière-plan
+      res.json({ ok: true, message: `Build v${version} en cours, flash suivra` });
+
+      (async () => {
+        try {
+          build = await buildAndStoreRelease(release);
+          if (!build) return;
+          const firmware = fs.readFileSync(path.join(BUILDS_DIR, `${version}.bin`));
+          broadcastSSE({ type: 'ota_build', step: 'flash', msg: 'Flash OTA en cours...', sha256: build.sha256 });
+          await flashFirmware(firmware);
+          broadcastSSE({ type: 'ota_build', step: 'success', msg: `Firmware v${version} flashé — redémarrage ESP32`, sha256: build.sha256 });
+        } catch (err) {
+          console.error('[ota] erreur :', err.message);
+          broadcastSSE({ type: 'ota_build', step: 'error', msg: err.message });
+        }
+      })();
+      return;
+    } catch (err) {
+      return res.status(502).json({ error: err.message });
+    }
+  }
+
+  // Build disponible → flash direct
+  res.json({ ok: true, message: `Flash v${version} lancé`, sha256: build.sha256 });
+
   (async () => {
     try {
-      console.log(`[ota-github] build + flash version ${release.version}...`);
-      const firmware = await buildFirmwareFromRelease(release);
-
-      broadcastSSE({ type: 'ota_build', step: 'flash', msg: 'Flash OTA en cours...' });
+      const firmware = fs.readFileSync(path.join(BUILDS_DIR, `${version}.bin`));
+      broadcastSSE({ type: 'ota_build', step: 'flash', msg: `Flash v${version} en cours...`, sha256: build.sha256 });
       await flashFirmware(firmware);
-
-      broadcastSSE({ type: 'ota_build', step: 'success', msg: `Firmware ${release.version} flashé — redémarrage ESP32` });
+      broadcastSSE({ type: 'ota_build', step: 'success', msg: `Firmware v${version} flashé — redémarrage ESP32`, sha256: build.sha256 });
     } catch (err) {
-      console.error('[ota-github] erreur :', err.message);
+      console.error('[ota] erreur flash :', err.message);
       broadcastSSE({ type: 'ota_build', step: 'error', msg: err.message });
-    } finally {
-      buildInProgress = false;
     }
   })();
+});
+
+// POST /api/ota/github — compatibilité avec l'ancien endpoint, redirige vers /api/ota/flash
+app.post('/api/ota/github', async (req, res) => {
+  // Réécrire la requête vers le nouvel endpoint
+  req.url = '/api/ota/flash';
+  app.handle(req, res);
 });
 
 // ─── Debug audio : écouter le micro ESP32 depuis le navigateur ────────────────
@@ -917,6 +1069,12 @@ server.on('upgrade', (req, socket, head) => {
 server.listen(PORT, () => {
   console.log(`[proxy] démarré sur http://0.0.0.0:${PORT}`);
   console.log(`[proxy] mode IA : ${USE_LOCAL_AI ? 'local' : 'cloud'}`);
+
+  // Vérifier les nouvelles releases et pré-compiler au démarrage, puis toutes les 5 minutes
+  const builds = getLocalBuilds();
+  console.log(`[build] ${builds.length} build(s) pré-compilé(s) en cache`);
+  setTimeout(pollAndBuild, 10000); // 10s après le démarrage
+  setInterval(pollAndBuild, POLL_INTERVAL_MS);
 });
 
 if (!USE_LOCAL_AI) connectOpenAI();
