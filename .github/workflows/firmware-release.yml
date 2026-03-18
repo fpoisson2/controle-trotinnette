@@ -2,23 +2,52 @@ name: Create Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # tous les tags
 
-      - name: Extraire la version du tag
+      - name: Calculer la version automatique
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+        run: |
+          # Format : vAAAA.MM.XX (XX s'incremente, repart a 01 chaque mois)
+          YEAR_MONTH=$(date -u +"%Y.%m")
+          PREFIX="v${YEAR_MONTH}"
+
+          # Trouver le dernier tag du mois courant
+          LAST_TAG=$(git tag -l "${PREFIX}.*" --sort=-v:refname | head -n1)
+
+          if [ -z "$LAST_TAG" ]; then
+            NEXT_NUM="01"
+          else
+            # Extraire le numero XX et incrementer
+            CURRENT_NUM=$(echo "$LAST_TAG" | sed "s/${PREFIX}\.//")
+            NEXT_NUM=$(printf "%02d" $((10#$CURRENT_NUM + 1)))
+          fi
+
+          VERSION="${YEAR_MONTH}.${NEXT_NUM}"
+          TAG="v${VERSION}"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION (tag: $TAG)"
+
+      - name: Creer le tag
+        run: |
+          git tag ${{ steps.version.outputs.tag }}
+          git push origin ${{ steps.version.outputs.tag }}
 
       - name: Creer la release GitHub
         uses: softprops/action-gh-release@v2
         with:
-          name: v${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
           body: |
             Version `${{ steps.version.outputs.version }}`
 
