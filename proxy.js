@@ -90,24 +90,46 @@ let openaiWs          = null;      // WebSocket vers OpenAI Realtime
 let openaiConnected   = false;
 
 // ─── Multi-trottinettes ─────────────────────────────────────────────────────
-// Map<scooterId, { ws, telemetry, fwVersion, debugMode, connectedAt, name }>
+// Map<scooterId, { ws, telemetry, fwVersion, debugMode, connectedAt, name, locked }>
 const scooters = new Map();
 let selectedScooterId = null;
+
+// ─── Courses (ride sessions) ────────────────────────────────────────────────
+// Map<rideId, { scooterId, startedAt, endedAt, startTelemetry, endTelemetry, distanceKm, durationSec }>
+const rides = new Map();
+let rideCounter = 0;
+
+function generateRideId() {
+  rideCounter++;
+  return `ride-${Date.now()}-${rideCounter}`;
+}
+
+function getActiveRide(scooterId) {
+  for (const [id, ride] of rides) {
+    if (ride.scooterId === scooterId && !ride.endedAt) return { id, ...ride };
+  }
+  return null;
+}
 
 function getSelectedScooter() {
   return scooters.get(selectedScooterId) || null;
 }
 
 function getScooterList() {
-  return Array.from(scooters.entries()).map(([id, s]) => ({
-    id,
-    name: s.name || id.split(':').slice(-2).join(':'),
-    fwVersion: s.fwVersion,
-    connected: s.ws.readyState === WebSocket.OPEN,
-    telemetry: s.telemetry,
-    selected: id === selectedScooterId,
-    connectedAt: s.connectedAt
-  }));
+  return Array.from(scooters.entries()).map(([id, s]) => {
+    const activeRide = getActiveRide(id);
+    return {
+      id,
+      name: s.name || id.split(':').slice(-2).join(':'),
+      fwVersion: s.fwVersion,
+      connected: s.ws.readyState === WebSocket.OPEN,
+      telemetry: s.telemetry,
+      selected: id === selectedScooterId,
+      connectedAt: s.connectedAt,
+      locked: s.locked !== false,  // verrouillée par défaut
+      activeRide: activeRide ? { id: activeRide.id, startedAt: activeRide.startedAt } : null
+    };
+  });
 }
 
 function getSelectedTelemetry() {
@@ -177,6 +199,17 @@ const TELEMETRY_TOOL_SCHEMA = {
 };
 
 function sendScooterCmd(action, intensity) {
+  // Bloquer les commandes moteur si la trottinette est verrouillée
+  const selected = getSelectedScooter();
+  if (selected && selected.locked !== false) {
+    const motorActions = ['avancer', 'freiner', 'vitesse_lente', 'vitesse_moyenne', 'vitesse_haute'];
+    if (motorActions.includes(action)) {
+      console.log(`[lock] commande ${action} bloquée — trottinette verrouillée`);
+      broadcastSSE({ type: 'lock_blocked', action, message: 'Trottinette verrouillée — déverrouillez pour rouler' });
+      return;
+    }
+  }
+
   const cmd = { type: 'cmd', action };
   if (intensity !== undefined) cmd.intensity = intensity;
 
@@ -583,7 +616,9 @@ app.get('/status', (req, res) => {
     scooter_count: scooters.size,
     selected_scooter: selectedScooterId,
     fw_version: selected?.fwVersion ?? null,
-    debug: selected?.debugMode ?? false
+    debug: selected?.debugMode ?? false,
+    locked: selected?.locked !== false,
+    active_ride: selected ? getActiveRide(selectedScooterId) : null
   });
 });
 
@@ -613,6 +648,132 @@ app.post('/api/scooters/rename', (req, res) => {
   scooter.name = name;
   broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
   res.json({ ok: true });
+});
+
+// ── POST /api/scooters/lock — verrouiller/déverrouiller une trottinette ──
+app.post('/api/scooters/lock', (req, res) => {
+  const { id, locked } = req.body;
+  const targetId = id || selectedScooterId;
+  const scooter = scooters.get(targetId);
+  if (!scooter) return res.status(404).json({ error: 'Trottinette non trouvée' });
+
+  const newLocked = locked !== undefined ? !!locked : !scooter.locked;
+  scooter.locked = newLocked;
+
+  // Envoyer la commande lock à l'ESP32
+  if (scooter.ws.readyState === WebSocket.OPEN) {
+    scooter.ws.send(JSON.stringify({ type: 'lock', locked: newLocked }));
+  }
+
+  // Si on verrouille et qu'il y a une course active, la terminer
+  if (newLocked) {
+    const activeRide = getActiveRide(targetId);
+    if (activeRide) {
+      endRideInternal(activeRide.id, targetId, scooter);
+    }
+  }
+
+  console.log(`[lock] ${targetId} ${newLocked ? 'verrouillée' : 'déverrouillée'}`);
+  broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
+  broadcastSSE({ type: 'lock_changed', scooterId: targetId, locked: newLocked });
+  res.json({ ok: true, locked: newLocked });
+});
+
+// ── POST /api/rides/start — démarrer une course ──
+app.post('/api/rides/start', (req, res) => {
+  const { id } = req.body;
+  const targetId = id || selectedScooterId;
+  const scooter = scooters.get(targetId);
+  if (!scooter) return res.status(404).json({ error: 'Trottinette non trouvée' });
+  if (scooter.ws.readyState !== WebSocket.OPEN) {
+    return res.status(503).json({ error: 'Trottinette hors ligne' });
+  }
+
+  // Vérifier qu'il n'y a pas déjà une course active
+  const existing = getActiveRide(targetId);
+  if (existing) {
+    return res.status(409).json({ error: 'Course déjà en cours', ride: existing });
+  }
+
+  // Déverrouiller la trottinette
+  scooter.locked = false;
+  scooter.ws.send(JSON.stringify({ type: 'lock', locked: false }));
+
+  // Créer la course
+  const rideId = generateRideId();
+  rides.set(rideId, {
+    scooterId: targetId,
+    startedAt: new Date().toISOString(),
+    endedAt: null,
+    startTelemetry: { ...scooter.telemetry },
+    endTelemetry: null,
+    distanceKm: 0,
+    durationSec: 0
+  });
+
+  console.log(`[ride] course ${rideId} démarrée sur ${targetId}`);
+  broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
+  broadcastSSE({ type: 'ride_started', rideId, scooterId: targetId });
+  res.json({ ok: true, rideId, scooterId: targetId });
+});
+
+// Fonction interne pour terminer une course
+function endRideInternal(rideId, scooterId, scooter) {
+  const ride = rides.get(rideId);
+  if (!ride || ride.endedAt) return null;
+
+  ride.endedAt = new Date().toISOString();
+  ride.endTelemetry = { ...scooter.telemetry };
+  ride.durationSec = Math.round((new Date(ride.endedAt) - new Date(ride.startedAt)) / 1000);
+
+  console.log(`[ride] course ${rideId} terminée — ${ride.durationSec}s`);
+  broadcastSSE({ type: 'ride_ended', rideId, scooterId, ride: rides.get(rideId) });
+  return ride;
+}
+
+// ── POST /api/rides/end — terminer une course ──
+app.post('/api/rides/end', (req, res) => {
+  const { id, rideId } = req.body;
+  const targetId = id || selectedScooterId;
+  const scooter = scooters.get(targetId);
+  if (!scooter) return res.status(404).json({ error: 'Trottinette non trouvée' });
+
+  // Trouver la course active
+  const activeRide = rideId ? { id: rideId, ...rides.get(rideId) } : getActiveRide(targetId);
+  if (!activeRide) {
+    return res.status(404).json({ error: 'Aucune course active' });
+  }
+
+  // Terminer la course
+  const ride = endRideInternal(activeRide.id, targetId, scooter);
+
+  // Reverrouiller la trottinette
+  scooter.locked = true;
+  if (scooter.ws.readyState === WebSocket.OPEN) {
+    scooter.ws.send(JSON.stringify({ type: 'lock', locked: true }));
+  }
+
+  broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
+  broadcastSSE({ type: 'lock_changed', scooterId: targetId, locked: true });
+  res.json({ ok: true, ride });
+});
+
+// ── GET /api/rides — historique des courses ──
+app.get('/api/rides', (req, res) => {
+  const scooterId = req.query.scooterId;
+  let rideList = Array.from(rides.entries()).map(([id, r]) => ({ id, ...r }));
+  if (scooterId) rideList = rideList.filter(r => r.scooterId === scooterId);
+  rideList.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  res.json(rideList.slice(0, limit));
+});
+
+// ── GET /api/rides/active — courses en cours ──
+app.get('/api/rides/active', (req, res) => {
+  const activeRides = Array.from(rides.entries())
+    .filter(([, r]) => !r.endedAt)
+    .map(([id, r]) => ({ id, ...r }));
+  res.json(activeRides);
 });
 
 // ─── OTA via proxy : flashFirmware() partagé ──────────────────────────────────
@@ -1080,11 +1241,14 @@ esp32Wss.on('connection', (ws) => {
             fwVersion: msg.version || null,
             debugMode: false,
             connectedAt: Date.now(),
-            name: null
+            name: null,
+            locked: true  // verrouillée par défaut au démarrage
           });
           // Auto-sélection si c'est la première trottinette
           if (!selectedScooterId) selectedScooterId = scooterId;
-          console.log(`[esp32-ws] enregistré: ${scooterId} (FW ${msg.version})`);
+          console.log(`[esp32-ws] enregistré: ${scooterId} (FW ${msg.version}) — verrouillée`);
+          // Envoyer l'état verrouillé à l'ESP32
+          ws.send(JSON.stringify({ type: 'lock', locked: true }));
           // Notifier le dashboard
           broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
 
@@ -1108,6 +1272,11 @@ esp32Wss.on('connection', (ws) => {
 
         } else if (msg.type === 'ota_result') {
           if (otaResolve) otaResolve(msg);
+
+        } else if (msg.type === 'lock_ack') {
+          console.log(`[lock] ${scooterId} confirme: ${msg.locked ? 'verrouillée' : 'déverrouillée'}`);
+          const entry = scooters.get(scooterId);
+          if (entry) entry.locked = msg.locked;
         }
       } catch (_) { /* ignore */ }
     }
@@ -1116,6 +1285,12 @@ esp32Wss.on('connection', (ws) => {
   ws.on('close', () => {
     if (scooterId) {
       console.log(`[esp32-ws] déconnecté: ${scooterId}`);
+      // Terminer toute course active sur cette trottinette
+      const activeRide = getActiveRide(scooterId);
+      const scooterEntry = scooters.get(scooterId);
+      if (activeRide && scooterEntry) {
+        endRideInternal(activeRide.id, scooterId, scooterEntry);
+      }
       scooters.delete(scooterId);
       // Si c'était la trottinette sélectionnée, en choisir une autre
       if (selectedScooterId === scooterId) {

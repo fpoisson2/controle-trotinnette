@@ -46,3 +46,10 @@
 // false : capteurs réels (implémenter readRealTelemetry() dans main.cpp)
 #define FAKE_TELEMETRY   true
 #define TELEMETRY_MS     500        // intervalle d'envoi (ms)
+
+// ── Deep sleep ───────────────────────────────────────────────────────────────
+// Durée d'inactivité avant mise en veille profonde (ms)
+// Réveil par manette (GPIO 32) ou frein (GPIO 39) — jingle DAC au boot
+// Mettre 0 pour désactiver le deep sleep
+// #define SLEEP_INACTIVITY_MS     120000   // 2 min (défaut dans sleep.h)
+// #define SLEEP_TIMER_WAKEUP_US   0        // réveil périodique (0=désactivé)

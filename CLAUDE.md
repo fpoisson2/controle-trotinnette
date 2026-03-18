@@ -95,12 +95,26 @@ La telemetrie est ecrite par Core 0 dans un buffer partage et envoyee par Core 1
 
 **ESP32 vers proxy** (`/ws-esp32`) :
 - Binaire : audio PCM16 16kHz (chunks de 4x512 samples = 128ms)
-- Texte JSON : `{"type":"telemetry", "speed":..., "voltage":..., ...}`
+- Texte JSON : `{"type":"telemetry", "speed":..., "voltage":..., "locked":bool, ...}`
+- Texte JSON : `{"type":"lock_ack", "locked":bool}` -- confirmation verrouillage
 
 **Proxy vers ESP32** :
 - `{"type":"audio", "data":"<base64 PCM16 24kHz>"}` -- reponse vocale IA
-- `{"type":"cmd", "action":"avancer|freiner|arreter|vitesse_*", "intensity":0.0-1.0}` -- commande moteur
+- `{"type":"cmd", "action":"avancer|freiner|arreter|vitesse_*", "intensity":0.0-1.0}` -- commande moteur (bloquee si locked)
+- `{"type":"lock", "locked":true|false}` -- verrouiller/deverrouiller la trottinette
 - `{"type":"ota_begin", "size":N}` + chunks binaires + `{"type":"ota_end"}` -- mise a jour firmware
+
+## Verrouillage et courses (libre-service)
+
+- La trottinette est **verrouillee par defaut** au boot et a la connexion
+- Quand `locked=true` : throttle force au neutre (manette + IA + commandes manuelles bloques)
+- Le deverrouillage se fait via `POST /api/scooters/lock` ou `POST /api/rides/start`
+- Une **course** (ride session) represente une utilisation : debut → rouler → fin
+- `POST /api/rides/start` : deverrouille + cree la course
+- `POST /api/rides/end` : termine la course + reverrouille automatiquement
+- `POST /api/scooters/lock` : verrouillage/deverrouillage manuel (admin/urgence)
+- Securite multi-couche : proxy bloque les cmds + firmware force neutre si locked
+- Deconnexion ESP32 termine automatiquement toute course active
 
 ## Variables d'environnement (.env)
 

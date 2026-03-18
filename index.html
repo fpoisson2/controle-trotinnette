@@ -199,6 +199,8 @@
   .log-entry.ai         { border-color: var(--accent); color: var(--text); }
   .log-entry.cmd        { border-color: var(--green); background: rgba(63,185,80,0.08); color: var(--green); font-weight: 700; }
   .log-entry.system     { border-color: var(--border); color: var(--muted); font-style: italic; }
+  .log-entry.sys        { border-color: var(--accent); color: var(--accent); }
+  .log-entry.warn       { border-color: var(--yellow); color: var(--yellow); font-weight: 700; }
   .log-time { font-size: 10px; color: var(--muted); margin-right: 5px; opacity: 0.7; }
 
   /* ── Login ── */
@@ -410,6 +412,11 @@
     <option value="">Aucune</option>
   </select>
   <span id="scooter-count" style="font-size:10px;color:var(--muted)">0</span>
+  <button class="hdr-btn" id="lock-btn" onclick="toggleLock()" title="Verrouiller/Déverrouiller"
+    style="font-size:14px;padding:3px 8px;border-color:var(--red);color:var(--red)">🔒</button>
+  <button class="hdr-btn" id="ride-btn" onclick="toggleRide()" title="Démarrer/Terminer une course"
+    style="display:none;font-size:11px;padding:3px 8px">COURSE</button>
+  <span id="ride-timer" style="font-size:10px;color:var(--green);display:none"></span>
   <div class="indicators">
     <span class="dot" id="dot-sse"  title="Proxy SSE"></span>
     <span class="ind-label">Proxy</span>
@@ -994,6 +1001,34 @@ function handleSSEMessage(msg) {
     case 'scooter_list':
       updateScooterList(msg.scooters);
       break;
+    case 'lock_changed':
+      if (!msg.scooterId || msg.scooterId === selectedScooterIdLocal) {
+        updateLockUI(msg.locked);
+      }
+      break;
+    case 'lock_blocked':
+      addLog('warn', msg.message || 'Commande bloquée — trottinette verrouillée');
+      break;
+    case 'ride_started':
+      if (msg.scooterId === selectedScooterIdLocal) {
+        activeRideId = msg.rideId;
+        rideStartTime = new Date().toISOString();
+        updateLockUI(false);
+        if (!rideTimerInterval) rideTimerInterval = setInterval(updateRideTimer, 1000);
+        addLog('sys', `Course ${msg.rideId} démarrée`);
+      }
+      break;
+    case 'ride_ended':
+      if (msg.scooterId === selectedScooterIdLocal) {
+        activeRideId = null;
+        rideStartTime = null;
+        if (rideTimerInterval) { clearInterval(rideTimerInterval); rideTimerInterval = null; }
+        const timerEl = document.getElementById('ride-timer');
+        if (timerEl) timerEl.style.display = 'none';
+        updateLockUI(true);
+        addLog('sys', `Course terminée (${msg.ride?.durationSec || 0}s)`);
+      }
+      break;
   }
 }
 
@@ -1057,6 +1092,14 @@ function fetchStatus() {
       if (s.selected_scooter) selectedScooterIdLocal = s.selected_scooter;
       const countEl = document.getElementById('scooter-count');
       if (countEl) countEl.textContent = s.scooter_count || 0;
+      // Verrouillage et course active
+      updateLockUI(s.locked !== false);
+      if (s.active_ride) {
+        activeRideId = s.active_ride.id;
+        rideStartTime = s.active_ride.startedAt;
+        if (!rideTimerInterval) rideTimerInterval = setInterval(updateRideTimer, 1000);
+        updateLockUI(false);
+      }
     })
     .catch(() => {});
   // Charger la liste des trottinettes
@@ -1088,10 +1131,26 @@ function updateScooterList(list) {
       const opt = document.createElement('option');
       opt.value = s.id;
       const shortId = s.name || s.id.split(':').slice(-2).join(':');
+      const lockIcon = s.locked ? ' 🔒' : '';
       const status = s.connected ? '' : ' [hors ligne]';
-      opt.textContent = `${shortId}${status}`;
+      opt.textContent = `${shortId}${lockIcon}${status}`;
       opt.selected = s.selected;
-      if (s.selected) selectedScooterIdLocal = s.id;
+      if (s.selected) {
+        selectedScooterIdLocal = s.id;
+        updateLockUI(s.locked);
+        // Mettre à jour l'état de la course active
+        if (s.activeRide) {
+          activeRideId = s.activeRide.id;
+          rideStartTime = s.activeRide.startedAt;
+          if (!rideTimerInterval) rideTimerInterval = setInterval(updateRideTimer, 1000);
+        } else {
+          activeRideId = null;
+          rideStartTime = null;
+          if (rideTimerInterval) { clearInterval(rideTimerInterval); rideTimerInterval = null; }
+          const timerEl = document.getElementById('ride-timer');
+          if (timerEl) timerEl.style.display = 'none';
+        }
+      }
       select.appendChild(opt);
     }
   }
@@ -1146,10 +1205,109 @@ function syncSlider(src) {
 
 function sendCmd(action) {
   if (simMode) { addLog('cmd', `⚡ [SIM] ${action.toUpperCase()}`); return; }
+  if (scooterLocked && ['avancer', 'freiner', 'vitesse_lente', 'vitesse_moyenne', 'vitesse_haute'].includes(action)) {
+    addLog('warn', 'Trottinette verrouillée — démarrez une course ou déverrouillez');
+    return;
+  }
   authFetch('/cmd', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, intensity: getIntensity() })
   }).catch(console.error);
+}
+
+// ─── Verrouillage / Déverrouillage ───────────────────────────────────────────
+let scooterLocked = true;
+let activeRideId = null;
+let rideStartTime = null;
+let rideTimerInterval = null;
+
+function updateLockUI(locked) {
+  scooterLocked = locked;
+  const lockBtn = document.getElementById('lock-btn');
+  const rideBtn = document.getElementById('ride-btn');
+  if (lockBtn) {
+    lockBtn.textContent = locked ? '🔒' : '🔓';
+    lockBtn.style.borderColor = locked ? 'var(--red)' : 'var(--green)';
+    lockBtn.style.color = locked ? 'var(--red)' : 'var(--green)';
+    lockBtn.title = locked ? 'Déverrouiller la trottinette' : 'Verrouiller la trottinette';
+  }
+  if (rideBtn) {
+    rideBtn.style.display = '';
+    if (activeRideId) {
+      rideBtn.textContent = 'FIN COURSE';
+      rideBtn.style.borderColor = 'var(--red)';
+      rideBtn.style.color = 'var(--red)';
+    } else {
+      rideBtn.textContent = 'COURSE';
+      rideBtn.style.borderColor = locked ? 'var(--muted)' : 'var(--green)';
+      rideBtn.style.color = locked ? 'var(--muted)' : 'var(--green)';
+    }
+  }
+}
+
+function updateRideTimer() {
+  if (!rideStartTime) return;
+  const elapsed = Math.round((Date.now() - new Date(rideStartTime).getTime()) / 1000);
+  const min = Math.floor(elapsed / 60);
+  const sec = elapsed % 60;
+  const timerEl = document.getElementById('ride-timer');
+  if (timerEl) {
+    timerEl.style.display = '';
+    timerEl.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+  }
+}
+
+async function toggleLock() {
+  try {
+    const r = await authFetch('/api/scooters/lock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ locked: !scooterLocked })
+    });
+    if (r.ok) {
+      const data = await r.json();
+      updateLockUI(data.locked);
+      addLog('sys', `Trottinette ${data.locked ? 'verrouillée' : 'déverrouillée'}`);
+    }
+  } catch (err) { console.error('[lock]', err); }
+}
+
+async function toggleRide() {
+  try {
+    if (activeRideId) {
+      // Terminer la course
+      const r = await authFetch('/api/rides/end', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rideId: activeRideId })
+      });
+      if (r.ok) {
+        const data = await r.json();
+        activeRideId = null;
+        rideStartTime = null;
+        if (rideTimerInterval) { clearInterval(rideTimerInterval); rideTimerInterval = null; }
+        const timerEl = document.getElementById('ride-timer');
+        if (timerEl) timerEl.style.display = 'none';
+        updateLockUI(true);
+        addLog('sys', `Course terminée (${data.ride.durationSec}s)`);
+      }
+    } else {
+      // Démarrer une course (déverrouille automatiquement)
+      const r = await authFetch('/api/rides/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      if (r.ok) {
+        const data = await r.json();
+        activeRideId = data.rideId;
+        rideStartTime = new Date().toISOString();
+        updateLockUI(false);
+        rideTimerInterval = setInterval(updateRideTimer, 1000);
+        addLog('sys', `Course ${data.rideId} démarrée`);
+      }
+    }
+  } catch (err) { console.error('[ride]', err); }
 }
 
 // ─── Bouton PTT ───────────────────────────────────────────────────────────────

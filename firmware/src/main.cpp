@@ -10,6 +10,7 @@
 #include "audio.h"
 #include "config.h"
 #include "flipsky.h"
+#include "sleep.h"
 #include <Update.h>
 
 static FlipskyData escData;
@@ -60,6 +61,10 @@ static void wsLog(const char *fmt, ...) {
 //  État global
 // ─────────────────────────────────────────────────────────────────────────────
 static volatile bool voiceActive = false;
+
+// ── Verrouillage à distance (libre-service) ──
+// Quand locked=true, le throttle est forcé au neutre (ESC ne répond pas)
+static volatile bool scooterLocked = true;  // verrouillée par défaut au boot
 
 // WebSocket serveur (télémétrie vers proxy)
 static WebSocketsServer wsServer(WS_SERVER_PORT);
@@ -250,6 +255,15 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 lastAction    = doc["action"] | "";
                 lastIntensity = doc["intensity"] | 0.5f;
                 lastAiCmd     = millis();
+                sleepResetActivity();  // commande IA = activité
+
+                // Sécurité : ignorer les commandes moteur si verrouillée
+                if (scooterLocked) {
+                    wsLog("[cmd] BLOQUÉ (verrouillée) : %s\n", lastAction.c_str());
+                    // Seul "arreter" est accepté même verrouillée (sécurité)
+                    if (lastAction != "arreter") break;
+                }
+
                 wsLog("[cmd] %s @ %.2f\n", lastAction.c_str(), lastIntensity);
 
                 // Cmd 02H : throttle 0-1023, 512=neutre
@@ -271,6 +285,22 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 } else if (lastAction == "vitesse_haute") {
                     currentGear = FTESC_GEAR_HIGH;
                 }
+            } else if (strcmp(evtype, "lock") == 0) {
+                bool newLocked = doc["locked"] | true;
+                scooterLocked = newLocked;
+                wsLog("[lock] trottinette %s", newLocked ? "verrouillée" : "déverrouillée");
+                if (newLocked) {
+                    // Forcer arrêt immédiat au verrouillage
+                    currentThrottle = FTESC_THROTTLE_NEUTRAL;
+                    brakeLightOn    = false;
+                    lastAction      = "arreter";
+                }
+                // Confirmer l'état au proxy
+                char lockMsg[64];
+                snprintf(lockMsg, sizeof(lockMsg),
+                    "{\"type\":\"lock_ack\",\"locked\":%s}",
+                    newLocked ? "true" : "false");
+                wsProxy.sendTXT(lockMsg);
             }
             break;
         }
@@ -444,8 +474,9 @@ static void sendTelemetry() {
 #endif
     // Ajouter type pour que le proxy sache que c'est de la télémétrie
     doc["type"] = "telemetry";
+    doc["locked"] = scooterLocked;
 
-    char buf[256];
+    char buf[320];
     serializeJson(doc, buf, sizeof(buf));
 
     // wsProxy : copier dans le buffer partagé, Core1 (taskCapture) envoie
@@ -464,6 +495,20 @@ static void sendTelemetry() {
 // ─────────────────────────────────────────────────────────────────────────────
 void setup() {
     delay(500);
+
+    // ── Détection réveil deep sleep et jingle de boot ──────────────────────
+    bool wokeFromSleep = sleepIsWakeFromDeepSleep();
+    if (wokeFromSleep) {
+        // Jouer le jingle de réveil IMMÉDIATEMENT (avant WiFi, I2S, etc.)
+        // L'utilisateur sait que la trottinette s'active
+        sleepPlayBootJingle();
+        Serial.begin(115200);
+        Serial.printf("\n=== RÉVEIL DEEP SLEEP — cause: %s ===\n", sleepGetWakeReason());
+    }
+
+    // Initialiser le compteur d'inactivité
+    sleepResetActivity();
+
     wsLog("\n=== Trottinette Intelligente — ESP32 ===");
 
     // Libérer GPIO 21/22 si le BSP les a initialisés comme I2C
@@ -605,8 +650,12 @@ void loop() {
         const bool escReady = (millis() >= 3000);
         if (escReady) {
         // Priorité IA pendant AI_CMD_PRIORITY_MS, ensuite manette physique
+        // Si verrouillée : ignorer manette ET commandes IA
         bool aiActive = (millis() - lastAiCmd < AI_CMD_PRIORITY_MS);
-        if (!aiActive) {
+        if (scooterLocked) {
+            currentThrottle = FTESC_THROTTLE_NEUTRAL;
+            brakeLightOn    = false;
+        } else if (!aiActive) {
             // Filtre médian 5 échantillons : immunisé contre les spikes ADC
             auto adcMedian5 = [](int pin) -> int {
                 int s[5];
@@ -701,7 +750,16 @@ void loop() {
             }
         }
 
-        ftesc_control(Serial2, currentThrottle, currentGear, brakeLightOn);
+        // Verrouillage : forcer neutre si locked (aucune commande moteur)
+        {
+            uint16_t escThrottle = currentThrottle;
+            bool escBrake = brakeLightOn;
+            if (scooterLocked) {
+                escThrottle = FTESC_THROTTLE_NEUTRAL;
+                escBrake    = false;
+            }
+            ftesc_control(Serial2, escThrottle, currentGear, escBrake);
+        }
         if (ftesc_poll(Serial2, escData)) {
             // RPM → km/h : roue 8.5" (≈0.216m diam) avec réduction ESC_POLE_PAIRS
             float kmh = fabsf(escData.rpm) / ESC_POLE_PAIRS
@@ -716,6 +774,24 @@ void loop() {
         if (millis() - lastTelSend >= TELEMETRY_MS) {
             lastTelSend = millis();
             sendTelemetry();
+        }
+    }
+
+    // ── Moniteur d'inactivité → deep sleep ───────────────────────────────────
+    // Vérifier toutes les secondes si le système est inactif
+    {
+        static uint32_t lastSleepCheck = 0;
+        if (millis() - lastSleepCheck >= 1000) {
+            lastSleepCheck = millis();
+
+            // Lire ADC bruts pour le test d'inactivité
+            int thrRaw = analogRead(THROTTLE_ADC_PIN);
+            int brkRaw = analogRead(BRAKE_ADC_PIN);
+            bool pttNow = (digitalRead(GEAR_R_PIN) == LOW);
+            bool aiNow  = (millis() - lastAiCmd < AI_CMD_PRIORITY_MS);
+
+            sleepCheckInactivity(thrRaw, brkRaw, pttNow, aiNow,
+                                 wsProxyConnected, throttleAdcMin, brakeAdcMin);
         }
     }
 }
