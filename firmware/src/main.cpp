@@ -6,11 +6,55 @@
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
 #include "esp_wpa2.h"
+#include <Wire.h>
 #include "audio.h"
 #include "config.h"
 #include "flipsky.h"
+#include <Update.h>
 
 static FlipskyData escData;
+
+// ── OTA via WebSocket proxy ──
+static volatile bool otaMode     = false;
+static size_t        otaTotal    = 0;
+static size_t        otaReceived = 0;
+
+// ── Debug logs via WebSocket (activable depuis la page web) ──
+static volatile bool debugMode   = false;
+
+// File d'attente circulaire de logs (Core0 écrit, Core1 envoie)
+#define LOG_QUEUE_SIZE 16
+#define LOG_MSG_SIZE   256
+static char logQueue[LOG_QUEUE_SIZE][LOG_MSG_SIZE];
+static volatile uint8_t logHead = 0;
+static volatile uint8_t logTail = 0;
+
+static void wsLog(const char *fmt, ...) {
+    if (!debugMode) return;
+    uint8_t next = (logHead + 1) % LOG_QUEUE_SIZE;
+    if (next == logTail) return;  // queue pleine, drop
+
+    char msg[192];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, args);
+    va_end(args);
+
+    // Échapper les caractères spéciaux pour JSON valide
+    char *dst = logQueue[logHead];
+    int pos = 0;
+    pos += snprintf(dst + pos, LOG_MSG_SIZE - pos, "{\"type\":\"log\",\"msg\":\"");
+    for (int i = 0; msg[i] && pos < LOG_MSG_SIZE - 4; i++) {
+        char c = msg[i];
+        if (c == '"' || c == '\\') { dst[pos++] = '\\'; dst[pos++] = c; }
+        else if (c == '\n') { dst[pos++] = '\\'; dst[pos++] = 'n'; }
+        else if (c == '\r') { /* skip */ }
+        else dst[pos++] = c;
+    }
+    pos += snprintf(dst + pos, LOG_MSG_SIZE - pos, "\"}");
+    dst[pos] = '\0';
+    logHead = next;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  État global
@@ -41,15 +85,22 @@ static char          telemetryJsonBuf[256];
 // Timestamp dernière commande IA (priorité sur manette physique)
 static volatile uint32_t lastAiCmd = 0;
 
+// Reconnexion WiFi non-bloquante (backoff exponentiel)
+static uint32_t          wifiRetryAt        = 0;
+static uint32_t          wifiRetryDelay     = 2000;   // commence à 2 s
+static uint8_t           wifiRetryCount     = 0;
+static volatile bool     wifiLost           = false;
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Connexion WiFi
 // ─────────────────────────────────────────────────────────────────────────────
-static void connectWiFi() {
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_STA);
 
+// Lance WiFi.begin() sans bloquer (identifiants EAP reconfigurés si nécessaire)
+static void wifiBegin() {
+    WiFi.disconnect(true);
+    delay(50);
+    WiFi.mode(WIFI_STA);
 #if WIFI_ENTERPRISE
-    Serial.println("[wifi] mode WPA2-Enterprise (EAP-PEAP)...");
     esp_wifi_sta_wpa2_ent_set_identity(
         (const uint8_t *)EAP_IDENTITY, strlen(EAP_IDENTITY));
     esp_wifi_sta_wpa2_ent_set_username(
@@ -59,43 +110,52 @@ static void connectWiFi() {
     esp_wifi_sta_wpa2_ent_enable();
     WiFi.begin(WIFI_SSID);
 #else
-    Serial.println("[wifi] mode WPA2 personnel...");
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 #endif
+}
+
+// Connexion bloquante au boot uniquement
+static void connectWiFi() {
+#if WIFI_ENTERPRISE
+    wsLog("[wifi] mode WPA2-Enterprise (EAP-PEAP)...");
+#else
+    wsLog("[wifi] mode WPA2 personnel...");
+#endif
+    wifiBegin();
 
     uint32_t t = millis();
     while (WiFi.status() != WL_CONNECTED) {
         if (millis() - t > 30000) {
-            Serial.println("[wifi] timeout — reboot");
+            wsLog("[wifi] timeout — reboot");
             ESP.restart();
         }
         delay(500);
-        Serial.print('.');
+        wsLog(".");
     }
-    Serial.printf("\n[wifi] connecté : %s\n", WiFi.localIP().toString().c_str());
+    wsLog("\n[wifi] connecté : %s\n", WiFi.localIP().toString().c_str());
 
     if (MDNS.begin("trottinette")) {
         MDNS.addService("ws", "tcp", WS_SERVER_PORT);
-        Serial.println("[mdns] trottinette.local");
+        wsLog("[mdns] trottinette.local");
     }
 
     // OTA
     ArduinoOTA.setHostname(OTA_HOSTNAME);
     ArduinoOTA.setPassword(OTA_PASSWORD);
     ArduinoOTA.onStart([]() {
-        Serial.println("[ota] démarrage mise à jour...");
+        wsLog("[ota] démarrage mise à jour...");
     });
     ArduinoOTA.onEnd([]() {
-        Serial.println("\n[ota] terminé — redémarrage");
+        wsLog("\n[ota] terminé — redémarrage");
     });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-        Serial.printf("[ota] %u%%\r", progress * 100 / total);
+        wsLog("[ota] %u%%\r", progress * 100 / total);
     });
     ArduinoOTA.onError([](ota_error_t error) {
-        Serial.printf("[ota] erreur %u\n", error);
+        wsLog("[ota] erreur %u\n", error);
     });
     ArduinoOTA.begin();
-    Serial.printf("[ota] prêt — hostname: %s\n", OTA_HOSTNAME);
+    wsLog("[ota] prêt — hostname: %s\n", OTA_HOSTNAME);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,14 +164,20 @@ static void connectWiFi() {
 // ─────────────────────────────────────────────────────────────────────────────
 static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
     switch (type) {
-        case WStype_CONNECTED:
+        case WStype_CONNECTED: {
             wsProxyConnected = true;
-            Serial.println("[ws-proxy] connecté");
+            wsLog("[ws-proxy] connecté");
+            // Envoyer la version firmware au proxy
+            char hello[96];
+            snprintf(hello, sizeof(hello),
+                "{\"type\":\"hello\",\"version\":\"%s\"}", FW_VERSION);
+            wsProxy.sendTXT(hello);
             break;
+        }
 
         case WStype_DISCONNECTED:
             wsProxyConnected = false;
-            Serial.println("[ws-proxy] déconnecté — reconnexion auto");
+            wsLog("[ws-proxy] déconnecté — reconnexion auto");
             break;
 
         case WStype_TEXT: {
@@ -123,24 +189,62 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 const char *b64 = doc["data"] | "";
                 size_t b64Len = strlen(b64);
                 if (b64Len > 0) {
-                    Serial.printf("[audio] delta %u chars\n", (unsigned)b64Len);
                     audioPushBase64(b64, b64Len);
                 }
             } else if (strcmp(evtype, "transcript") == 0) {
-                Serial.printf("[stt] %s\n", doc["text"] | "");
+                // stt visible sur la page web, pas besoin de log debug
             } else if (strcmp(evtype, "ai_response") == 0) {
-                Serial.printf("[ia] %s", doc["text"] | "");
+                // ia response visible sur la page web, pas besoin de log debug
+            } else if (strcmp(evtype, "debug") == 0) {
+                debugMode = doc["enabled"] | false;
+                wsLog("[debug] mode %s", debugMode ? "activé" : "désactivé");
+            } else if (strcmp(evtype, "ota_begin") == 0) {
+                size_t fwSize = doc["size"] | 0;
+                if (fwSize == 0) break;
+                wsLog("[ota] début — %u bytes\n", (unsigned)fwSize);
+                otaTotal    = fwSize;
+                otaReceived = 0;
+                // Désactiver I2S pendant l'OTA pour libérer mémoire/DMA
+                i2s_driver_uninstall(I2S_NUM_0);
+                if (!Update.begin(fwSize)) {
+                    wsLog("[ota] Update.begin() échoué");
+                    char msg[128];
+                    snprintf(msg, sizeof(msg),
+                        "{\"type\":\"ota_result\",\"success\":false,\"error\":\"Update.begin échoué\"}");
+                    wsProxy.sendTXT(msg);
+                    // Réinstaller I2S
+                    audioInitI2S();
+                } else {
+                    otaMode = true;
+                }
+            } else if (strcmp(evtype, "ota_end") == 0) {
+                if (otaMode) {
+                    if (Update.end(true)) {
+                        wsProxy.sendTXT("{\"type\":\"ota_result\",\"success\":true}");
+                        wsProxy.loop();  // flush
+                        delay(1000);
+                        ESP.restart();
+                    } else {
+                        wsLog("[ota] Update.end() échoué : %s\n",
+                            Update.errorString());
+                        char msg[128];
+                        snprintf(msg, sizeof(msg),
+                            "{\"type\":\"ota_result\",\"success\":false,\"error\":\"%s\"}",
+                            Update.errorString());
+                        wsProxy.sendTXT(msg);
+                    }
+                    otaMode = false;
+                }
             } else if (strcmp(evtype, "cmd") == 0) {
                 lastAction    = doc["action"] | "";
                 lastIntensity = doc["intensity"] | 0.5f;
                 lastAiCmd     = millis();
-                Serial.printf("[cmd] %s @ %.2f\n", lastAction.c_str(), lastIntensity);
+                wsLog("[cmd] %s @ %.2f\n", lastAction.c_str(), lastIntensity);
 
                 // Cmd 02H : throttle 0-1023, 512=neutre
                 if (lastAction == "avancer") {
                     currentThrottle = (uint16_t)(FTESC_THROTTLE_NEUTRAL +
                         lastIntensity * (FTESC_THROTTLE_MAX - FTESC_THROTTLE_NEUTRAL));
-                    if (currentGear == FTESC_GEAR_REVERSE) currentGear = FTESC_GEAR_HIGH;
                     brakeLightOn    = false;
                 } else if (lastAction == "freiner") {
                     currentThrottle = (uint16_t)(FTESC_THROTTLE_NEUTRAL -
@@ -155,14 +259,32 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                     currentGear = FTESC_GEAR_MEDIUM;
                 } else if (lastAction == "vitesse_haute") {
                     currentGear = FTESC_GEAR_HIGH;
-                } else if (lastAction == "marche_arriere") {
-                    currentGear     = FTESC_GEAR_REVERSE;
-                    currentThrottle = FTESC_THROTTLE_NEUTRAL;
-                    brakeLightOn    = false;
                 }
             }
             break;
         }
+        case WStype_BIN:
+            // En mode OTA, les messages binaires sont des chunks firmware
+            if (otaMode && length > 0) {
+                size_t written = Update.write(payload, length);
+                if (written != length) {
+                    wsLog("[ota] erreur écriture : %u/%u\n",
+                        (unsigned)written, (unsigned)length);
+                }
+                otaReceived += written;
+                uint8_t pct = (uint8_t)(otaReceived * 100 / otaTotal);
+                static uint8_t lastPct = 255;
+                if (pct != lastPct && pct % 10 == 0) {
+                    lastPct = pct;
+                    wsLog("[ota] %u%%\n", pct);
+                    char msg[64];
+                    snprintf(msg, sizeof(msg),
+                        "{\"type\":\"ota_progress\",\"percent\":%u}", pct);
+                    wsProxy.sendTXT(msg);
+                }
+            }
+            break;
+
         default: break;
     }
 }
@@ -176,7 +298,7 @@ static uint8_t pcmAccum[MIC_CHUNK_SAMPLES * 2 * 4];  // 4 chunks = 128 ms
 static size_t  pcmAccumLen = 0;
 
 static void taskCapture(void *) {
-    Serial.println("[capture] tâche démarrée");
+    wsLog("[capture] tâche démarrée");
     while (true) {
 #if AUDIO_LOOPBACK
         // Mode test : bouton enfoncé = enregistre, relâché = rejoue
@@ -188,7 +310,7 @@ static void taskCapture(void *) {
         if (!recBuf) {
             recBuf = (uint8_t *)malloc(REC_MAX);
             if (!recBuf) {
-                Serial.printf("[loopback] malloc échoué, heap=%u\n",
+                wsLog("[loopback] malloc échoué, heap=%u\n",
                               (unsigned)esp_get_free_heap_size());
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 continue;
@@ -202,7 +324,7 @@ static void taskCapture(void *) {
                 recLen += len;
             }
         } else if (wasActive && recLen > 0) {
-            Serial.printf("[loopback] replay %u bytes\n", (unsigned)recLen);
+            wsLog("[loopback] replay %u bytes\n", (unsigned)recLen);
             dacEnqueue(recBuf, recLen);
             recLen = 0;
         } else {
@@ -219,7 +341,26 @@ static void taskCapture(void *) {
             wsProxy.sendTXT(telemetryJsonBuf);
             telemetryPending = false;
         }
+        // Envoyer logs debug en attente (vider la queue)
+        while (logTail != logHead && wsProxyConnected) {
+            wsProxy.sendTXT(logQueue[logTail]);
+            logTail = (logTail + 1) % LOG_QUEUE_SIZE;
+        }
+        // Heartbeat debug toutes les 3s (directement sur Core1 pour test)
+        {
+            static uint32_t lastDbgHb = 0;
+            if (debugMode && wsProxyConnected && millis() - lastDbgHb > 3000) {
+                lastDbgHb = millis();
+                char hb[128];
+                snprintf(hb, sizeof(hb),
+                    "{\"type\":\"log\",\"msg\":\"[hb] heap=%u queue=%d\"}",
+                    (unsigned)esp_get_free_heap_size(),
+                    (int)((logHead - logTail + LOG_QUEUE_SIZE) % LOG_QUEUE_SIZE));
+                wsProxy.sendTXT(hb);
+            }
+        }
 
+        if (otaMode) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
         size_t len = audioCaptureChunk(pcmBuf);  // toujours lire l'I2S
         if (voiceActive && wsProxyConnected && len > 0) {
             // Accumuler 4 chunks (128 ms) avant d'envoyer une frame WS
@@ -247,11 +388,11 @@ static void onWsServerEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t
     switch (type) {
         case WStype_CONNECTED:
             wsServerClientNum = num;
-            Serial.printf("[ws-srv] proxy connecté (#%d)\n", num);
+            wsLog("[ws-srv] proxy connecté (#%d)\n", num);
             break;
         case WStype_DISCONNECTED:
             if (wsServerClientNum == num) wsServerClientNum = 255;
-            Serial.println("[ws-srv] proxy déconnecté");
+            wsLog("[ws-srv] proxy déconnecté");
             break;
         default: break;
     }
@@ -311,9 +452,11 @@ static void sendTelemetry() {
 //  setup / loop
 // ─────────────────────────────────────────────────────────────────────────────
 void setup() {
-    Serial.begin(115200);
     delay(500);
-    Serial.println("\n=== Trottinette Intelligente — ESP32 ===");
+    wsLog("\n=== Trottinette Intelligente — ESP32 ===");
+
+    // Libérer GPIO 21/22 si le BSP les a initialisés comme I2C
+    Wire.end();
 
     pinMode(VOICE_BTN_PIN, INPUT_PULLUP);
 
@@ -321,33 +464,51 @@ void setup() {
     // Évite que la pin flotte si le capteur est déconnecté
     pinMode(THROTTLE_ADC_PIN, INPUT_PULLDOWN);
 
-    // Boutons manette gear (actif LOW)
+    // Bouton PTT (actif LOW)
     pinMode(GEAR_R_PIN, INPUT_PULLUP);
-    pinMode(GEAR_L_PIN, INPUT_PULLUP);
-    pinMode(GEAR_H_PIN, INPUT_PULLUP);
+
+    // Event WiFi : déconnexion détectée immédiatement, reconnexion déclenchée au prochain loop
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
+        if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+            wifiLost    = true;
+            wifiRetryAt = 0;  // retry immédiat
+            wsLog("[wifi] déconnecté (event)");
+        } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+            wifiLost       = false;
+            wifiRetryDelay = 2000;
+            wifiRetryCount = 0;
+            wsLog("[wifi] reconnecté : %s\n", WiFi.localIP().toString().c_str());
+            // Ré-enregistrer mDNS après reconnexion
+            MDNS.end();
+            if (MDNS.begin("trottinette")) {
+                MDNS.addService("ws", "tcp", WS_SERVER_PORT);
+                wsLog("[mdns] trottinette.local (ré-enregistré)");
+            }
+        }
+    });
 
     connectWiFi();
 
     Serial2.begin(ESC_BAUD, SERIAL_8N1, ESC_RX_PIN, ESC_TX_PIN);
-    Serial.println("[esc] Flipsky UART initialisé");
+    wsLog("[esc] Flipsky UART initialisé");
 
     esp_err_t e = audioInitI2S();
-    Serial.printf("[i2s] %s\n", e == ESP_OK ? "OK" : "ERREUR");
+    wsLog("[i2s] %s\n", e == ESP_OK ? "OK" : "ERREUR");
 
     audioInitDAC();
-    Serial.println("[dac] timer OK");
+    wsLog("[dac] timer OK");
 
     // WebSocket serveur (télémétrie)
     wsServer.begin();
     wsServer.onEvent(onWsServerEvent);
-    Serial.printf("[ws-srv] port %d\n", WS_SERVER_PORT);
+    wsLog("[ws-srv] port %d\n", WS_SERVER_PORT);
 
     // WebSocket client unique vers proxy (audio + réponses IA)
     wsProxy.beginSSL(PROXY_HOST, PROXY_PORT, "/ws-esp32");
     wsProxy.onEvent(onWsProxyEvent);
     wsProxy.setReconnectInterval(3000);
     wsProxy.enableHeartbeat(10000, 3000, 2);  // ping/10 s — évite coupure Cloudflare
-    Serial.printf("[ws-proxy] connexion vers wss://%s/ws-esp32\n", PROXY_HOST);
+    wsLog("[ws-proxy] connexion vers wss://%s/ws-esp32\n", PROXY_HOST);
 
     // Tâche capture + wsProxy sur Core 1
     xTaskCreatePinnedToCore(taskCapture, "taskCapture", 20480, NULL, 2, NULL, 1);
@@ -367,17 +528,27 @@ void setup() {
         delay(30);
     }
 
-    Serial.println("[cal] calibration throttle au repos...");
-    long tSum = 0;
-    for (int i = 0; i < 100; i++) {
-        tSum += analogRead(THROTTLE_ADC_PIN);
-        delay(10);
-    }
-    throttleAdcMin = (int)(tSum / 100);
-    // brakeAdcMin : valeur fixe config.h (GPIO39 stable, pas de circuit parasite)
-    Serial.printf("[cal] thr_min=%d brk_min=%d (fixe)\n", throttleAdcMin, brakeAdcMin);
+    // Attendre 2 s que l'ADC et la tension de référence se stabilisent
+    // (I2S, DAC, WiFi radio tous actifs → référence analogique stable)
+    wsLog("[cal] attente stabilisation ADC (2 s)...");
+    delay(2000);
 
-    Serial.println("[setup] prêt — appuyer sur le bouton pour activer le micro");
+    wsLog("[cal] calibration throttle au repos (médiane 200 samples)...");
+    {
+        int samples[200];
+        for (int i = 0; i < 200; i++) { samples[i] = analogRead(THROTTLE_ADC_PIN); delay(10); }
+        // tri insertion pour médiane
+        for (int i = 1; i < 200; i++) {
+            int k = samples[i], j = i - 1;
+            while (j >= 0 && samples[j] > k) { samples[j+1] = samples[j]; j--; }
+            samples[j+1] = k;
+        }
+        throttleAdcMin = samples[100]; // médiane
+    }
+    // brakeAdcMin : valeur fixe config.h (GPIO39 stable, pas de circuit parasite)
+    wsLog("[cal] thr_min=%d brk_min=%d (fixe)\n", throttleAdcMin, brakeAdcMin);
+
+    wsLog("[setup] prêt — appuyer sur le bouton pour activer le micro");
 }
 
 void loop() {
@@ -386,37 +557,37 @@ void loop() {
 
 
     // ── Gear-R = push-to-talk : tenir = micro actif, relâcher = inactif ────────
-    voiceActive = (digitalRead(GEAR_R_PIN) == LOW);
-
-    // ── Gear-L / H : sélection de vitesse (M supprimé — GPIO22 = PTT) ────────
-    static uint8_t prevGear = FTESC_GEAR_HIGH;
-    bool gH = digitalRead(GEAR_H_PIN) == LOW;
-    bool gL = digitalRead(GEAR_L_PIN) == LOW;
-    if (gH) currentGear = FTESC_GEAR_HIGH;
-    else if (gL) currentGear = FTESC_GEAR_LOW;
-    if (currentGear != prevGear) {
-        Serial.printf("[gear] L=%d H=%d → gear=%d\n", gL, gH, currentGear);
-        prevGear = currentGear;
+    // Anti-rebond 80 ms : filtre les pulses RTS du chip USB-série sur GPIO0
+    {
+        static bool     pttState   = false;
+        static bool     pttRaw     = false;
+        static uint32_t pttChanged = 0;
+        bool now = (digitalRead(GEAR_R_PIN) == LOW);
+        if (now != pttRaw) { pttRaw = now; pttChanged = millis(); }
+        if (millis() - pttChanged >= 300) pttState = pttRaw;
+        voiceActive = pttState;
     }
 
-    // ── Log ADC toutes les 2s pour calibration ────────────────────────────────
-    static uint32_t lastAdcLog = 0;
-    if (millis() - lastAdcLog > 2000) {
-        lastAdcLog = millis();
-        Serial.printf("[adc] thr=%d brk=%d ptt=%d gL=%d gH=%d\n",
-            analogRead(THROTTLE_ADC_PIN), analogRead(BRAKE_ADC_PIN),
-            !digitalRead(GEAR_R_PIN), !digitalRead(GEAR_L_PIN),
-            !digitalRead(GEAR_H_PIN));
+    // Vitesse unique : toujours FTESC_GEAR_HIGH (sélection vocale via IA)
+
+
+    // Reconnexion WiFi : backoff exponentiel 2s → 4s → 8s → … → 30s max, reboot après 20 échecs
+    if (wifiLost && millis() >= wifiRetryAt) {
+        wifiRetryCount++;
+        wsLog("[wifi] tentative reconnexion #%d (prochain essai dans %lu ms)\n",
+                      wifiRetryCount, (unsigned long)wifiRetryDelay);
+        if (wifiRetryCount >= 20) {
+            wsLog("[wifi] trop d'échecs — reboot");
+            ESP.restart();
+        }
+        wifiBegin();
+        wifiRetryAt = millis() + wifiRetryDelay;
+        wifiRetryDelay = min(wifiRetryDelay * 2, (uint32_t)30000);
     }
 
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[wifi] connexion perdue — reconnexion...");
-        connectWiFi();
-    }
-
-    // ── Cmd 02H : contrôle + télémétrie toutes les 50 ms (20 Hz) ────────────
+    // ── Cmd 02H : contrôle + télémétrie toutes les 1000 ms (1 Hz) ───────────
     static uint32_t lastControl = 0;
-    if (millis() - lastControl >= 50) {
+    if (millis() - lastControl >= 1000) {
         lastControl = millis();
 #if !FAKE_TELEMETRY
         // Attendre 3s après le boot pour laisser l'ESC finir son initialisation
@@ -491,19 +662,32 @@ void loop() {
 
             // Rate limiting :
             //   démarrage (RPM < 100) → immédiat (couple max pour vaincre la charge)
-            //   accélération en mouvement → +150/cycle (~170ms neutre→max)
-            //   relâche/frein → immédiat (neutre ou frein sans délai)
-            const uint16_t RAMP_UP = (fabsf(escData.rpm) < 100) ? 511 : 150;
+            //   accélération → +150/cycle (~170ms neutre→max)
+            //   décélération relâche → -80/cycle (doux, évite coupure brusque)
+            //   frein → immédiat
+            const uint16_t RAMP_UP   = (fabsf(escData.rpm) < 100) ? 511 : 150;
+            const uint16_t RAMP_DOWN = 80;
             if (targetThrottle > currentThrottle + RAMP_UP)
                 currentThrottle += RAMP_UP;
+            else if (!brakeOn && targetThrottle < currentThrottle && currentThrottle > targetThrottle + RAMP_DOWN)
+                currentThrottle -= RAMP_DOWN;
             else
                 currentThrottle = targetThrottle;
         }
 
-        // Si on freine et moteur arrêté → retour au neutre
-        if (brakeLightOn && fabsf(escData.rpm) < 5.0f) {
-            currentThrottle = FTESC_THROTTLE_NEUTRAL;
-            brakeLightOn    = false;
+        // Réduction progressive du frein moteur quand la vitesse diminue :
+        // entre 100 RPM et 5 RPM → frein réduit linéairement vers zéro
+        if (brakeLightOn) {
+            float rpm = fabsf(escData.rpm);
+            if (rpm < 5.0f) {
+                currentThrottle = FTESC_THROTTLE_NEUTRAL;
+                brakeLightOn    = false;
+            } else if (rpm < 100.0f) {
+                float factor = (rpm - 5.0f) / 95.0f;  // 0 à 5 RPM, 1 à 100 RPM
+                uint16_t maxBrake = (uint16_t)(FTESC_THROTTLE_NEUTRAL * factor);
+                uint16_t minAllowed = FTESC_THROTTLE_NEUTRAL - maxBrake;
+                if (currentThrottle < minAllowed) currentThrottle = minAllowed;
+            }
         }
 
         ftesc_control(Serial2, currentThrottle, currentGear, brakeLightOn);
@@ -511,7 +695,7 @@ void loop() {
             // RPM → km/h : roue 8.5" (≈0.216m diam) avec réduction ESC_POLE_PAIRS
             float kmh = fabsf(escData.rpm) / ESC_POLE_PAIRS
                         * 60.0f * 0.216f * 3.14159f / 1000.0f;
-            Serial.printf("[esc] thr=%u %.1fkm/h V=%.1fV A=%.2fA RPM=%.0f T=%.1f°C\n",
+            wsLog("[esc] thr=%u %.1fkm/h V=%.1fV A=%.2fA RPM=%.0f T=%.1f°C",
                 currentThrottle, kmh, escData.voltage, escData.motorCurrent,
                 escData.rpm, escData.tempFet);
         }

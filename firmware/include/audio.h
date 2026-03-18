@@ -15,47 +15,66 @@
 #include <Arduino.h>
 #include <driver/i2s.h>
 #include <driver/dac.h>
+#include <soc/dac_channel.h>
+#include <soc/sens_reg.h>
 #include "mbedtls/base64.h"
 #include "config.h"
 
-// ── Ring buffer pour la lecture DAC (alimenté par taskSSE, lu par timer ISR) ─
-#define DAC_RING_SIZE  16384   // ~680 ms à 24 kHz
+// ── Ring buffer pour la lecture DAC (alimenté par taskCapture, lu par timer ISR)
+#define DAC_RING_SIZE  32768   // ~1.36 s à 24 kHz (power of 2 pour masque rapide)
+#define DAC_RING_MASK  (DAC_RING_SIZE - 1)
 
 static volatile uint8_t  dacRing[DAC_RING_SIZE];
-static volatile uint32_t dacHead = 0;   // index d'écriture (taskSSE)
+static volatile uint32_t dacHead = 0;   // index d'écriture
 static volatile uint32_t dacTail = 0;   // index de lecture (ISR)
 
-// ── Insérer des samples PCM16 dans le ring buffer (throttle si plein) ────────
+// ── Insérer des samples PCM16 dans le ring buffer ────────────────────────────
+// Non-bloquant : si le buffer est plein, attend brièvement par blocs, puis drop
 inline void dacEnqueue(const uint8_t *pcm16, size_t byteCount) {
     const size_t nSamples = byteCount / 2;
-    for (size_t i = 0; i < nSamples; i++) {
-        uint32_t next = (dacHead + 1) % DAC_RING_SIZE;
-        // Attendre que l'ISR consomme si le buffer est plein (throttle)
+
+    // Attendre de la place en bloc (max 50 ms) au lieu de par-sample
+    uint32_t avail = (dacTail - dacHead - 1 + DAC_RING_SIZE) & DAC_RING_MASK;
+    if (avail < nSamples) {
         uint32_t waited = 0;
-        while (next == dacTail && waited < 200) {
+        while (avail < nSamples && waited < 50) {
             vTaskDelay(pdMS_TO_TICKS(1));
             waited++;
+            avail = (dacTail - dacHead - 1 + DAC_RING_SIZE) & DAC_RING_MASK;
         }
-        if (next == dacTail) break;  // timeout — abandonner le reste
-        // PCM16 → amplification → uint8_t 0-255
+    }
+
+    // Écrire autant de samples que possible
+    size_t toWrite = nSamples;
+    avail = (dacTail - dacHead - 1 + DAC_RING_SIZE) & DAC_RING_MASK;
+    if (toWrite > avail) toWrite = avail;
+
+    for (size_t i = 0; i < toWrite; i++) {
         int16_t s = (int16_t)(pcm16[i * 2] | (pcm16[i * 2 + 1] << 8));
         int32_t amp = (int32_t)(s * VOLUME_GAIN);
         if (amp >  32767) amp =  32767;
         if (amp < -32768) amp = -32768;
         dacRing[dacHead] = (uint8_t)(((int16_t)amp >> 8) + 128);
-        dacHead = next;
+        dacHead = (dacHead + 1) & DAC_RING_MASK;
     }
 }
 
-// ── ISR timer — lecture ring buffer → DAC ────────────────────────────────────
+// ── ISR timer — lecture ring buffer → DAC (écriture registre directe) ────────
 static hw_timer_t *dacTimer = nullptr;
+
+// Écriture directe au registre DAC — plus rapide que dac_output_voltage() dans l'ISR
+static inline void IRAM_ATTR dacWriteFast(uint8_t val) {
+    // DAC channel 1 = GPIO25
+    SET_PERI_REG_BITS(SENS_SAR_DAC_CTRL2_REG, SENS_DAC_CW_EN1_M, 0, SENS_DAC_CW_EN1_S);
+    SET_PERI_REG_BITS(RTC_IO_PAD_DAC1_REG, RTC_IO_PDAC1_DAC, val, RTC_IO_PDAC1_DAC_S);
+}
 
 void IRAM_ATTR onDacTimer() {
     if (dacHead != dacTail) {
-        dac_output_voltage(DAC_CHANNEL_1, dacRing[dacTail]);
-        dacTail = (dacTail + 1) % DAC_RING_SIZE;
+        dacWriteFast(dacRing[dacTail]);
+        dacTail = (dacTail + 1) & DAC_RING_MASK;
     } else {
-        dac_output_voltage(DAC_CHANNEL_1, 128);  // silence DC
+        dacWriteFast(128);  // silence DC
     }
 }
 
@@ -112,8 +131,11 @@ inline size_t audioCaptureChunk(uint8_t *pcmOut) {
     i2s_read(I2S_NUM_0, raw, sizeof(raw), &bytesRead, pdMS_TO_TICKS(100));
     const size_t n = bytesRead / sizeof(int32_t);
     for (size_t i = 0; i < n; i++) {
-        // SPH0645 / ICS-43434 : données en bits [31:14], >> 16 → PCM16
-        int16_t s = (int16_t)(raw[i] >> 16);
+        // SPH0645 / ICS-43434 : données en bits [31:14], >> 16 → PCM16 + gain logiciel
+        int32_t amp = (raw[i] >> 16) * MIC_GAIN;
+        if (amp >  32767) amp =  32767;
+        if (amp < -32768) amp = -32768;
+        int16_t s = (int16_t)amp;
         pcmOut[i * 2]     = (uint8_t)(s & 0xFF);
         pcmOut[i * 2 + 1] = (uint8_t)((s >> 8) & 0xFF);
     }
@@ -121,16 +143,14 @@ inline size_t audioCaptureChunk(uint8_t *pcmOut) {
 }
 
 // ── Décoder base64 et enqueue dans le ring buffer DAC ────────────────────────
+// Buffer statique : les chunks base64 font max 4096 chars → ~3072 bytes PCM
+static uint8_t b64DecodeBuf[4096];
+
 inline void audioPushBase64(const char *b64, size_t b64Len) {
-    // Taille max du buffer PCM décodé
-    const size_t maxDecoded = ((b64Len + 3) / 4) * 3;
-    uint8_t *buf = (uint8_t *)malloc(maxDecoded);
-    if (!buf) return;
     size_t outLen = 0;
-    int rc = mbedtls_base64_decode(buf, maxDecoded, &outLen,
+    int rc = mbedtls_base64_decode(b64DecodeBuf, sizeof(b64DecodeBuf), &outLen,
                                    (const unsigned char *)b64, b64Len);
     if (rc == 0 && outLen > 0) {
-        dacEnqueue(buf, outLen);
+        dacEnqueue(b64DecodeBuf, outLen);
     }
-    free(buf);
 }

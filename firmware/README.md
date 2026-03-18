@@ -47,12 +47,10 @@
 
 | Bouton         | GPIO | Fonction                                  |
 |----------------|------|-------------------------------------------|
-| Gear-F (PTT)   | **22** | Push-to-talk assistant vocal (tenir = ON) |
-| Gear-L         | **21** | Vitesse lente (limite 33 %)               |
-| Gear-H         | **23** | Vitesse haute (plein régime)              |
+| PTT            | **23** | Push-to-talk assistant vocal (tenir = ON) |
 
-> Câblage : bouton entre GPIO et GND. Pull-up interne activé.
-> Gear-M supprimé — GPIO 22 réaffecté au PTT.
+> Câblage : bouton entre GPIO 23 et GND. Pull-up interne activé.
+> Vitesse sélectionnée vocalement via l'IA (commandes vitesse_lente/moyenne/haute).
 
 ---
 
@@ -89,7 +87,7 @@
 | 25   | MODEM_DTR     | DAC haut-parleur (DTR non activé = OK) |
 | 26   | MODEM_TX      | — |
 | 27   | MODEM_RX      | — |
-| 33   | MODEM_RING    | — |
+| 33   | MODEM_RING    | PTT bouton vocal (modem non utilisé) |
 | 35   | VBAT monitor  | ne pas utiliser pour ADC |
 | 36   | SOLAR_IN      | ne pas utiliser pour ADC |
 
