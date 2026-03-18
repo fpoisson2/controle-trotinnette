@@ -6,6 +6,9 @@ const express  = require('express');
 const http     = require('http');
 const WebSocket = require('ws');
 const path     = require('path');
+const fs       = require('fs');
+const { execSync } = require('child_process');
+const os       = require('os');
 const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
 
@@ -635,7 +638,7 @@ app.post('/ota', async (req, res) => {
   }
 });
 
-// ─── GitHub Releases API ──────────────────────────────────────────────────────
+// ─── GitHub Releases API — compilation locale ────────────────────────────────
 const GITHUB_REPO = 'fpoisson2/controle-trotinnette';
 let releaseCache = { data: null, ts: 0 };
 const RELEASE_CACHE_MS = 5 * 60 * 1000; // 5 minutes
@@ -656,13 +659,11 @@ async function fetchLatestRelease() {
   }
 
   const release = await resp.json();
-  const binAsset = release.assets?.find(a => a.name.endsWith('.bin'));
   const result = {
     version: release.tag_name.replace(/^v/, ''),
     tag: release.tag_name,
     published_at: release.published_at,
-    download_url: binAsset?.browser_download_url || null,
-    asset_name: binAsset?.name || null,
+    tarball_url: release.tarball_url,
     body: release.body || ''
   };
 
@@ -682,22 +683,83 @@ app.get('/api/releases/latest', async (req, res) => {
   }
 });
 
-// POST /api/ota/github — télécharge le .bin depuis GitHub et flashe l'ESP32
+// Compile le firmware depuis le source GitHub + config.h local
+// Retourne le Buffer du .bin compilé
+async function buildFirmwareFromRelease(release) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-build-'));
+  const tarball = path.join(tmpDir, 'source.tar.gz');
+  const localConfigH = path.join(__dirname, 'firmware', 'include', 'config.h');
+
+  try {
+    // Télécharger le tarball source
+    console.log(`[build] téléchargement source ${release.tag}...`);
+    const resp = await fetch(release.tarball_url, {
+      headers: { 'User-Agent': 'trottinette-proxy' },
+      redirect: 'follow'
+    });
+    if (!resp.ok) throw new Error(`Téléchargement source échoué: HTTP ${resp.status}`);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    fs.writeFileSync(tarball, buf);
+
+    // Extraire
+    execSync(`tar xzf source.tar.gz`, { cwd: tmpDir });
+
+    // Trouver le répertoire extrait (GitHub le nomme owner-repo-sha/)
+    const extracted = fs.readdirSync(tmpDir).find(f =>
+      f !== 'source.tar.gz' && fs.statSync(path.join(tmpDir, f)).isDirectory()
+    );
+    if (!extracted) throw new Error('Répertoire source introuvable après extraction');
+    const srcDir = path.join(tmpDir, extracted, 'firmware');
+
+    if (!fs.existsSync(srcDir)) throw new Error('Répertoire firmware/ introuvable dans le source');
+
+    // Copier le config.h local (contient WiFi, EAP, proxy, OTA)
+    if (!fs.existsSync(localConfigH)) {
+      throw new Error('config.h local introuvable — nécessaire pour la compilation');
+    }
+    fs.copyFileSync(localConfigH, path.join(srcDir, 'include', 'config.h'));
+
+    // Injecter la version du tag dans config.h
+    const configPath = path.join(srcDir, 'include', 'config.h');
+    let configContent = fs.readFileSync(configPath, 'utf8');
+    configContent = configContent.replace(
+      /#define\s+FW_VERSION\s+"[^"]*"/,
+      `#define FW_VERSION  "${release.version}"`
+    );
+    fs.writeFileSync(configPath, configContent);
+
+    // Build avec PlatformIO
+    console.log('[build] compilation PlatformIO...');
+    execSync('pio run -e esp32dev', {
+      cwd: srcDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 300000 // 5 min max
+    });
+
+    // Lire le .bin résultant
+    const binPath = path.join(srcDir, '.pio', 'build', 'esp32dev', 'firmware.bin');
+    if (!fs.existsSync(binPath)) throw new Error('firmware.bin introuvable après compilation');
+
+    const firmware = fs.readFileSync(binPath);
+    console.log(`[build] compilation réussie — ${firmware.length} bytes`);
+    return firmware;
+  } finally {
+    // Nettoyage
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+// POST /api/ota/github — télécharge le source, compile localement, flashe l'ESP32
 app.post('/api/ota/github', async (req, res) => {
   try {
     const release = await fetchLatestRelease();
     if (!release) return res.status(404).json({ error: 'Aucune release trouvée' });
-    if (!release.download_url) return res.status(404).json({ error: 'Pas de .bin dans la release' });
 
-    console.log(`[ota-github] téléchargement ${release.asset_name} (${release.version})...`);
-    const dlResp = await fetch(release.download_url, {
-      headers: { 'User-Agent': 'trottinette-proxy' }
-    });
-    if (!dlResp.ok) throw new Error(`Téléchargement échoué: HTTP ${dlResp.status}`);
+    console.log(`[ota-github] build + flash version ${release.version}...`);
+    broadcastSSE({ type: 'ota_progress', percent: 0 });
 
-    const arrayBuf = await dlResp.arrayBuffer();
-    const firmware = Buffer.from(arrayBuf);
-    console.log(`[ota-github] téléchargé ${firmware.length} bytes — flash OTA...`);
+    const firmware = await buildFirmwareFromRelease(release);
+    broadcastSSE({ type: 'ota_progress', percent: 10 });
 
     const result = await flashFirmware(firmware);
     res.json({ ...result, version: release.version });

@@ -1267,7 +1267,7 @@ async function checkFirmwareUpdate() {
       ghBtn.disabled = true;
       statusEl.textContent = 'Firmware à jour.';
     } else {
-      ghBtn.disabled = !latestRelease.download_url;
+      ghBtn.disabled = false;
       statusEl.textContent = '';
     }
   } catch (err) {
@@ -1286,7 +1286,7 @@ async function flashFromGitHub() {
   const barEl = document.getElementById('ota-bar');
   const ghBtn = document.getElementById('ota-github-btn');
 
-  statusEl.textContent = 'Téléchargement et flash en cours...';
+  statusEl.textContent = 'Compilation et flash en cours...';
   barEl.style.width = '0';
   barEl.style.background = 'var(--green)';
   ghBtn.disabled = true;

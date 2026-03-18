@@ -1,4 +1,4 @@
-name: Build & Release Firmware
+name: Create Release
 
 on:
   push:
@@ -6,124 +6,21 @@ on:
       - 'v*'
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Extraire la version du tag
         id: version
-        run: |
-          TAG="${GITHUB_REF#refs/tags/v}"
-          echo "version=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Version: $TAG"
-
-      - name: Generer config.h depuis les secrets
-        run: |
-          cat > firmware/include/config.h << 'HEADER'
-          #pragma once
-
-          // ── WiFi ──
-          HEADER
-
-          cat >> firmware/include/config.h << EOF
-          #define WIFI_ENTERPRISE  ${{ secrets.WIFI_ENTERPRISE == 'true' && 'true' || 'false' }}
-          #define WIFI_SSID        "${{ secrets.WIFI_SSID }}"
-          #define WIFI_PASSWORD    "${{ secrets.WIFI_PASSWORD }}"
-          #define EAP_IDENTITY     "${{ secrets.EAP_IDENTITY }}"
-          #define EAP_USERNAME     "${{ secrets.EAP_USERNAME }}"
-          #define EAP_PASSWORD     "${{ secrets.EAP_PASSWORD }}"
-
-          // ── Proxy ──
-          #define PROXY_HOST       "${{ secrets.PROXY_HOST }}"
-          #define PROXY_PORT       443
-
-          // ── WebSocket serveur ──
-          #define WS_SERVER_PORT   8080
-
-          // ── Bouton toggle vocal ──
-          #define VOICE_BTN_PIN    34
-
-          // ── Microphone I2S MEMS (LilyGO T-A7670E) ──
-          #define MIC_BCLK_PIN     18
-          #define MIC_LRCLK_PIN    19
-          #define MIC_DATA_PIN     34
-
-          // ── Haut-parleur DAC ──
-          #define SPK_PIN          25
-
-          // ── Parametres audio ──
-          #define MIC_SAMPLE_RATE     16000
-          #define SPK_SAMPLE_RATE     24000
-          #define MIC_CHUNK_SAMPLES   512
-          #define MIC_GAIN            64
-
-          // ── Manette physique ──
-          #define THROTTLE_ADC_PIN   32
-          #define THROTTLE_ADC_MIN   1300
-          #define THROTTLE_ADC_MAX   2800
-          #define THROTTLE_DEADZONE  500
-
-          #define BRAKE_ADC_PIN      39
-          #define BRAKE_ADC_MIN      900
-          #define BRAKE_ADC_MAX      3500
-          #define BRAKE_DEADZONE     600
-
-          #define GEAR_R_PIN    2
-
-          #define AI_CMD_PRIORITY_MS  8000
-
-          // ── ESC Flipsky UART2 (LilyGO T-A7670E) ──
-          #define ESC_RX_PIN   14
-          #define ESC_TX_PIN   13
-          #define ESC_BAUD     115200
-          #define ESC_DUTY_MAX 0.8f
-          #define ESC_CURRENT_MAX 15.0f
-          #define ESC_BRAKE_MAX 20.0f
-          #define ESC_POLE_PAIRS 7
-
-          // ── Telemetrie ──
-          #define FAKE_TELEMETRY   false
-          #define TELEMETRY_MS     500
-
-          // ── Volume haut-parleur ──
-          #define VOLUME_GAIN      2.0f
-
-          // ── Version firmware (injectee par CI) ──
-          #define FW_VERSION  "${{ steps.version.outputs.version }}"
-
-          // ── OTA ──
-          #define OTA_HOSTNAME  "trottinette"
-          #define OTA_PASSWORD  "${{ secrets.OTA_PASSWORD }}"
-
-          // ── Loopback ──
-          #define AUDIO_LOOPBACK   false
-          EOF
-
-      - name: Installer PlatformIO
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Installer PlatformIO Core
-        run: pip install platformio
-
-      - name: Build firmware
-        run: cd firmware && pio run -e esp32dev
-
-      - name: Renommer le binaire
-        run: |
-          cp firmware/.pio/build/esp32dev/firmware.bin \
-             firmware-${{ steps.version.outputs.version }}.bin
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
       - name: Creer la release GitHub
         uses: softprops/action-gh-release@v2
         with:
-          name: Firmware ${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
           body: |
-            Firmware version `${{ steps.version.outputs.version }}`
+            Version `${{ steps.version.outputs.version }}`
 
-            Flashable via OTA depuis le dashboard web ou manuellement.
-          files: firmware-${{ steps.version.outputs.version }}.bin
+            Le firmware est compilé localement par le proxy avec le `config.h` du serveur.
+            Mettre à jour depuis le dashboard web → Debug → Mise à jour firmware.
