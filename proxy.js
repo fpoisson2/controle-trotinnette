@@ -86,22 +86,45 @@ const PORT           = parseInt(process.env.PROXY_PORT || '3000', 10);
 
 // ─── État global ─────────────────────────────────────────────────────────────
 let sseClients        = [];        // res objects des clients SSE (navigateur)
-let esp32Ws           = null;      // WebSocket ESP32 (/ws-esp32)
 let openaiWs          = null;      // WebSocket vers OpenAI Realtime
 let openaiConnected   = false;
-let lastTelemetry     = { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0 };
-let esp32FwVersion    = null;      // version firmware ESP32 (reçue via hello)
-let esp32DebugMode    = false;     // mode debug ESP32 actif
 
-// ─── Broadcast vers navigateurs (SSE) + ESP32 (WS) ───────────────────────────
+// ─── Multi-trottinettes ─────────────────────────────────────────────────────
+// Map<scooterId, { ws, telemetry, fwVersion, debugMode, connectedAt, name }>
+const scooters = new Map();
+let selectedScooterId = null;
+
+function getSelectedScooter() {
+  return scooters.get(selectedScooterId) || null;
+}
+
+function getScooterList() {
+  return Array.from(scooters.entries()).map(([id, s]) => ({
+    id,
+    name: s.name || id.split(':').slice(-2).join(':'),
+    fwVersion: s.fwVersion,
+    connected: s.ws.readyState === WebSocket.OPEN,
+    telemetry: s.telemetry,
+    selected: id === selectedScooterId,
+    connectedAt: s.connectedAt
+  }));
+}
+
+function getSelectedTelemetry() {
+  const selected = getSelectedScooter();
+  return selected ? selected.telemetry : { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0 };
+}
+
+// ─── Broadcast vers navigateurs (SSE) + trottinette sélectionnée (WS) ──────
 function broadcastSSE(obj) {
   const payload = `data: ${JSON.stringify(obj)}\n\n`;
   for (const client of sseClients) {
     try { client.write(payload); } catch (_) { /* client déconnecté */ }
   }
-  // Envoyer aussi à l'ESP32 via WebSocket
-  if (esp32Ws && esp32Ws.readyState === WebSocket.OPEN) {
-    try { esp32Ws.send(JSON.stringify(obj)); } catch (_) {}
+  // Envoyer aussi à la trottinette sélectionnée (réponses audio, commandes)
+  const selected = getSelectedScooter();
+  if (selected && selected.ws.readyState === WebSocket.OPEN) {
+    try { selected.ws.send(JSON.stringify(obj)); } catch (_) {}
   }
 }
 
@@ -270,7 +293,7 @@ function connectOpenAI() {
                   success: true,
                   action: args.action,
                   intensity: args.intensity ?? null,
-                  telemetry: lastTelemetry
+                  telemetry: getSelectedTelemetry()
                 })
               }
             }));
@@ -279,13 +302,13 @@ function connectOpenAI() {
             console.error('[openai] erreur parsing tool call :', err.message);
           }
         } else if (event.name === 'lire_telemetrie') {
-          console.log('[openai] lire_telemetrie :', JSON.stringify(lastTelemetry));
+          console.log('[openai] lire_telemetrie :', JSON.stringify(getSelectedTelemetry()));
           openaiWs.send(JSON.stringify({
             type: 'conversation.item.create',
             item: {
               type: 'function_call_output',
               call_id: event.call_id,
-              output: JSON.stringify(lastTelemetry)
+              output: JSON.stringify(getSelectedTelemetry())
             }
           }));
           openaiWs.send(JSON.stringify({ type: 'response.create' }));
@@ -538,39 +561,73 @@ app.post('/cmd', (req, res) => {
   res.json({ ok: true });
 });
 
-// ── POST /debug — activer/désactiver le mode debug ESP32 ──
+// ── POST /debug — activer/désactiver le mode debug sur la trottinette sélectionnée ──
 app.post('/debug', (req, res) => {
-  const { enabled } = req.body;
-  esp32DebugMode = !!enabled;
-  if (esp32Ws && esp32Ws.readyState === WebSocket.OPEN) {
-    esp32Ws.send(JSON.stringify({ type: 'debug', enabled: esp32DebugMode }));
+  const selected = getSelectedScooter();
+  if (!selected) return res.status(503).json({ error: 'Aucune trottinette sélectionnée' });
+  selected.debugMode = !!req.body.enabled;
+  if (selected.ws.readyState === WebSocket.OPEN) {
+    selected.ws.send(JSON.stringify({ type: 'debug', enabled: selected.debugMode }));
   }
-  console.log(`[debug] mode ${esp32DebugMode ? 'activé' : 'désactivé'}`);
-  res.json({ ok: true, debug: esp32DebugMode });
+  console.log(`[debug] ${selectedScooterId} mode ${selected.debugMode ? 'activé' : 'désactivé'}`);
+  res.json({ ok: true, debug: selected.debugMode });
 });
 
 // ── GET /status ──
 app.get('/status', (req, res) => {
-  const esp32Connected = esp32Ws && esp32Ws.readyState === WebSocket.OPEN;
+  const selected = getSelectedScooter();
   res.json({
     mode: USE_LOCAL_AI ? 'local' : 'cloud',
     openai_connected: USE_LOCAL_AI ? null : openaiConnected,
-    scooter_connected: esp32Connected,
-    fw_version: esp32FwVersion,
-    debug: esp32DebugMode
+    scooter_connected: !!selected && selected.ws.readyState === WebSocket.OPEN,
+    scooter_count: scooters.size,
+    selected_scooter: selectedScooterId,
+    fw_version: selected?.fwVersion ?? null,
+    debug: selected?.debugMode ?? false
   });
+});
+
+// ── GET /api/scooters — liste toutes les trottinettes connectées ──
+app.get('/api/scooters', (req, res) => {
+  res.json(getScooterList());
+});
+
+// ── POST /api/scooters/select — sélectionner une trottinette ──
+app.post('/api/scooters/select', (req, res) => {
+  const { id } = req.body;
+  if (id && !scooters.has(id)) {
+    return res.status(404).json({ error: 'Trottinette non trouvée' });
+  }
+  selectedScooterId = id || null;
+  console.log(`[scooter] sélection: ${selectedScooterId || 'aucune'}`);
+  const list = getScooterList();
+  broadcastSSE({ type: 'scooter_list', scooters: list });
+  res.json(list);
+});
+
+// ── POST /api/scooters/rename — renommer une trottinette ──
+app.post('/api/scooters/rename', (req, res) => {
+  const { id, name } = req.body;
+  const scooter = scooters.get(id);
+  if (!scooter) return res.status(404).json({ error: 'Trottinette non trouvée' });
+  scooter.name = name;
+  broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
+  res.json({ ok: true });
 });
 
 // ─── OTA via proxy : flashFirmware() partagé ──────────────────────────────────
 let otaInProgress = false;
 let otaResolve    = null;
 
-// Fonction partagée : envoie un Buffer firmware à l'ESP32 via WebSocket
-// Retourne une Promise<{ok, message, error}>
-function flashFirmware(firmware) {
+// Fonction partagée : envoie un Buffer firmware à une trottinette via WebSocket
+// targetId optionnel — si absent, utilise la trottinette sélectionnée
+function flashFirmware(firmware, targetId = null) {
+  const id = targetId || selectedScooterId;
+  const scooter = id ? scooters.get(id) : null;
+
   return new Promise((resolve, reject) => {
-    if (!esp32Ws || esp32Ws.readyState !== WebSocket.OPEN) {
-      return reject(new Error('ESP32 non connecté'));
+    if (!scooter || scooter.ws.readyState !== WebSocket.OPEN) {
+      return reject(new Error('Trottinette non connectée'));
     }
     if (otaInProgress) {
       return reject(new Error('OTA déjà en cours'));
@@ -579,23 +636,24 @@ function flashFirmware(firmware) {
       return reject(new Error('Firmware invalide (trop petit ou pas un Buffer)'));
     }
 
+    const ws = scooter.ws;
     const md5 = crypto.createHash('md5').update(firmware).digest('hex');
-    console.log(`[ota] envoi firmware ${firmware.length} bytes à l'ESP32 — MD5: ${md5}`);
+    console.log(`[ota] envoi firmware ${firmware.length} bytes à ${id} — MD5: ${md5}`);
     otaInProgress = true;
 
-    esp32Ws.send(JSON.stringify({ type: 'ota_begin', size: firmware.length, md5 }));
+    ws.send(JSON.stringify({ type: 'ota_begin', size: firmware.length, md5 }));
 
     const CHUNK = 1024;
     let offset = 0;
 
     function sendNextChunk() {
       if (offset >= firmware.length) {
-        esp32Ws.send(JSON.stringify({ type: 'ota_end' }));
+        ws.send(JSON.stringify({ type: 'ota_end' }));
         return;
       }
       const end = Math.min(offset + CHUNK, firmware.length);
       const chunk = firmware.slice(offset, end);
-      esp32Ws.send(chunk, { binary: true }, () => {
+      ws.send(chunk, { binary: true }, () => {
         offset = end;
         const pct = Math.round(offset / firmware.length * 100);
         if (pct % 10 === 0) console.log(`[ota] envoyé ${pct}%`);
@@ -986,54 +1044,68 @@ debugAudioWss.on('connection', (ws) => {
   });
 });
 
-// ─── WebSocket ESP32 (/ws-esp32) — audio entrant + events sortants ────────────
+// ─── WebSocket ESP32 (/ws-esp32) — multi-trottinettes ───────────────────────
 const esp32Wss = new WebSocket.Server({ noServer: true });
 
 esp32Wss.on('connection', (ws) => {
-  console.log('[esp32-ws] ESP32 connecté');
-  esp32Ws = ws;
+  console.log('[esp32-ws] nouvelle connexion (attente hello)');
+  let scooterId = null;
 
   ws.on('message', (data, isBinary) => {
     if (isBinary) {
-      // Audio PCM → OpenAI Realtime
-      if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
-        openaiWs.send(JSON.stringify({
-          type: 'input_audio_buffer.append',
-          audio: Buffer.from(data).toString('base64')
-        }));
-      } else {
-        console.warn(`[esp32-ws] audio reçu mais OpenAI non connecté (ws=${!!openaiWs}, state=${openaiWs?.readyState})`);
-      }
-      // Relayer le PCM brut aux clients debug-audio
-      for (const c of debugAudioClients) {
-        if (c.readyState === WebSocket.OPEN) {
-          try { c.send(data, { binary: true }); } catch (_) {}
+      // Audio PCM — uniquement de la trottinette sélectionnée vers OpenAI
+      if (scooterId === selectedScooterId) {
+        if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+          openaiWs.send(JSON.stringify({
+            type: 'input_audio_buffer.append',
+            audio: Buffer.from(data).toString('base64')
+          }));
+        }
+        // Relayer le PCM brut aux clients debug-audio (trottinette sélectionnée seulement)
+        for (const c of debugAudioClients) {
+          if (c.readyState === WebSocket.OPEN) {
+            try { c.send(data, { binary: true }); } catch (_) {}
+          }
         }
       }
     } else {
-      // Message texte : télémétrie JSON venant de l'ESP32
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.type === 'telemetry') {
-          const { type, ...fields } = msg;
-          lastTelemetry = { ...lastTelemetry, ...fields };
-          // Relayer aux clients SSE (navigateur)
-          const payload = `data: ${JSON.stringify({ type: 'telemetry', ...fields })}\n\n`;
-          for (const c of sseClients) { try { c.write(payload); } catch (_) {} }
-        } else if (msg.type === 'hello') {
-          esp32FwVersion = msg.version || null;
-          console.log(`[esp32-ws] firmware version: ${esp32FwVersion}`);
-          // Restaurer l'état debug si actif
-          if (esp32DebugMode) {
-            ws.send(JSON.stringify({ type: 'debug', enabled: true }));
+
+        if (msg.type === 'hello') {
+          scooterId = msg.mac || `esp32-${Date.now()}`;
+          scooters.set(scooterId, {
+            ws,
+            telemetry: { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0 },
+            fwVersion: msg.version || null,
+            debugMode: false,
+            connectedAt: Date.now(),
+            name: null
+          });
+          // Auto-sélection si c'est la première trottinette
+          if (!selectedScooterId) selectedScooterId = scooterId;
+          console.log(`[esp32-ws] enregistré: ${scooterId} (FW ${msg.version})`);
+          // Notifier le dashboard
+          broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
+
+        } else if (msg.type === 'telemetry') {
+          const entry = scooters.get(scooterId);
+          if (entry) {
+            const { type, ...fields } = msg;
+            entry.telemetry = { ...entry.telemetry, ...fields };
+            // Relayer aux clients SSE avec l'ID de la trottinette
+            const payload = `data: ${JSON.stringify({ type: 'telemetry', scooterId, ...fields })}\n\n`;
+            for (const c of sseClients) { try { c.write(payload); } catch (_) {} }
           }
+
         } else if (msg.type === 'log') {
-          // Relayer les logs ESP32 aux clients SSE
-          const payload = `data: ${JSON.stringify({ type: 'esp32_log', msg: msg.msg })}\n\n`;
+          const payload = `data: ${JSON.stringify({ type: 'esp32_log', scooterId, msg: msg.msg })}\n\n`;
           for (const c of sseClients) { try { c.write(payload); } catch (_) {} }
+
         } else if (msg.type === 'ota_progress') {
-          console.log(`[ota] ESP32 : ${msg.percent}%`);
-          broadcastSSE({ type: 'ota_progress', percent: msg.percent });
+          console.log(`[ota] ${scooterId} : ${msg.percent}%`);
+          broadcastSSE({ type: 'ota_progress', scooterId, percent: msg.percent });
+
         } else if (msg.type === 'ota_result') {
           if (otaResolve) otaResolve(msg);
         }
@@ -1042,9 +1114,16 @@ esp32Wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    console.log('[esp32-ws] ESP32 déconnecté');
-    if (esp32Ws === ws) esp32Ws = null;
-    // Si l'ESP32 se déconnecte pendant un OTA, c'est un reboot → succès
+    if (scooterId) {
+      console.log(`[esp32-ws] déconnecté: ${scooterId}`);
+      scooters.delete(scooterId);
+      // Si c'était la trottinette sélectionnée, en choisir une autre
+      if (selectedScooterId === scooterId) {
+        selectedScooterId = scooters.size > 0 ? scooters.keys().next().value : null;
+      }
+      broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
+    }
+    // Si déconnexion pendant OTA → c'est un reboot → succès
     if (otaInProgress && otaResolve) {
       otaResolve({ success: true, message: 'ESP32 rebooté après flash' });
     }

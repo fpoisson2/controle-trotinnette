@@ -167,11 +167,16 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
         case WStype_CONNECTED: {
             wsProxyConnected = true;
             wsLog("[ws-proxy] connecté");
-            // Envoyer la version firmware au proxy
-            char hello[96];
-            snprintf(hello, sizeof(hello),
-                "{\"type\":\"hello\",\"version\":\"%s\"}", FW_VERSION);
-            wsProxy.sendTXT(hello);
+            // Envoyer la version firmware + MAC au proxy
+            {
+                uint8_t mac[6];
+                WiFi.macAddress(mac);
+                char hello[160];
+                snprintf(hello, sizeof(hello),
+                    "{\"type\":\"hello\",\"version\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}",
+                    FW_VERSION, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                wsProxy.sendTXT(hello);
+            }
             break;
         }
 

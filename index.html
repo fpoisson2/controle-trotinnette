@@ -405,6 +405,11 @@
 <!-- ── Header ── -->
 <header>
   <h1>TROTTINETTE INTELLIGENTE</h1>
+  <select id="scooter-select" onchange="selectScooter(this.value)" title="Trottinette active"
+    style="padding:3px 6px;font-size:11px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);max-width:140px">
+    <option value="">Aucune</option>
+  </select>
+  <span id="scooter-count" style="font-size:10px;color:var(--muted)">0</span>
   <div class="indicators">
     <span class="dot" id="dot-sse"  title="Proxy SSE"></span>
     <span class="ind-label">Proxy</span>
@@ -779,33 +784,80 @@ let processor     = null;
 let isRecording   = false;
 let audioQueue    = [];
 let isPlayingAudio= false;
-let map, mapDesktop, scooterMarker, scooterMarkerDesktop;
+let map, mapDesktop;
 let lastPos = [46.8492, -71.3434];
+// Multi-trottinettes : marqueurs par scooterId
+const scooterMarkers = new Map();  // id → { mobile: L.marker, desktop: L.marker }
+let selectedScooterIdLocal = null;
 
 // ─── Carte ────────────────────────────────────────────────────────────────────
-function makeIcon() {
+function makeIcon(color = '#58a6ff') {
   return L.divIcon({
-    html: '<div style="width:14px;height:14px;border-radius:50%;background:#58a6ff;border:2px solid #fff;box-shadow:0 0 8px #58a6ff"></div>',
+    html: `<div style="width:14px;height:14px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 0 8px ${color}"></div>`,
     iconSize: [14,14], iconAnchor: [7,7]
   });
 }
 
 function initMap() {
-  // Carte mobile
   map = L.map('map', { zoomControl: false }).setView(lastPos, 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map);
-  scooterMarker = L.marker(lastPos, { icon: makeIcon() }).addTo(map);
 
-  // Carte desktop
   mapDesktop = L.map('map-desktop', { zoomControl: true }).setView(lastPos, 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(mapDesktop);
-  scooterMarkerDesktop = L.marker(lastPos, { icon: makeIcon() }).addTo(mapDesktop);
 }
 
+function updateScooterMarker(scooterId, lat, lon) {
+  if (!lat || !lon) return;
+  const pos = [lat, lon];
+  const isSelected = scooterId === selectedScooterIdLocal;
+  const color = isSelected ? '#58a6ff' : '#8b949e';
+
+  let markers = scooterMarkers.get(scooterId);
+  if (!markers) {
+    markers = {
+      mobile:  L.marker(pos, { icon: makeIcon(color) }).addTo(map),
+      desktop: L.marker(pos, { icon: makeIcon(color) }).addTo(mapDesktop)
+    };
+    // Tooltip avec l'ID court
+    const shortId = scooterId.split(':').slice(-2).join(':');
+    markers.mobile.bindTooltip(shortId, { permanent: false });
+    markers.desktop.bindTooltip(shortId, { permanent: false });
+    scooterMarkers.set(scooterId, markers);
+  } else {
+    markers.mobile.setLatLng(pos);
+    markers.desktop.setLatLng(pos);
+  }
+
+  // Centrer la carte sur la trottinette sélectionnée
+  if (isSelected) {
+    lastPos = pos;
+    map.panTo(pos);
+    mapDesktop.panTo(pos);
+  }
+}
+
+function refreshMarkerColors() {
+  for (const [id, markers] of scooterMarkers) {
+    const color = id === selectedScooterIdLocal ? '#58a6ff' : '#8b949e';
+    markers.mobile.setIcon(makeIcon(color));
+    markers.desktop.setIcon(makeIcon(color));
+  }
+}
+
+function removeScooterMarker(scooterId) {
+  const markers = scooterMarkers.get(scooterId);
+  if (markers) {
+    map.removeLayer(markers.mobile);
+    mapDesktop.removeLayer(markers.desktop);
+    scooterMarkers.delete(scooterId);
+  }
+}
+
+// Compat ancien code
 function updateMapPos(lat, lon) {
-  lastPos = [lat, lon];
-  if (scooterMarker)        { scooterMarker.setLatLng(lastPos); map.panTo(lastPos); }
-  if (scooterMarkerDesktop) { scooterMarkerDesktop.setLatLng(lastPos); mapDesktop.panTo(lastPos); }
+  if (selectedScooterIdLocal) {
+    updateScooterMarker(selectedScooterIdLocal, lat, lon);
+  }
 }
 
 // ─── Jauges ───────────────────────────────────────────────────────────────────
@@ -921,7 +973,16 @@ function handleSSEMessage(msg) {
     case 'cmd':
       addLog('cmd', `⚡ ${msg.action.toUpperCase()}${msg.intensity != null ? ' @ ' + Math.round(msg.intensity * 100) + '%' : ''}`);
       break;
-    case 'telemetry': applyTelemetry(msg); break;
+    case 'telemetry':
+      // Mettre à jour le marqueur de cette trottinette sur la carte
+      if (msg.scooterId) {
+        updateScooterMarker(msg.scooterId, msg.lat, msg.lon);
+      }
+      // Mettre à jour les jauges uniquement pour la trottinette sélectionnée
+      if (!msg.scooterId || msg.scooterId === selectedScooterIdLocal) {
+        applyTelemetry(msg);
+      }
+      break;
     case 'esp32_log': appendDebugLog(msg.msg); break;
     case 'ota_progress':
       document.getElementById('ota-bar').style.width = msg.percent + '%';
@@ -929,6 +990,9 @@ function handleSSEMessage(msg) {
       break;
     case 'ota_build':
       handleBuildEvent(msg);
+      break;
+    case 'scooter_list':
+      updateScooterList(msg.scooters);
       break;
   }
 }
@@ -987,11 +1051,81 @@ function fetchStatus() {
       if (fwEl) fwEl.textContent = s.fw_version ? 'FW ' + s.fw_version : '';
       const otaInstalled = document.getElementById('ota-installed');
       if (otaInstalled) otaInstalled.textContent = s.fw_version || '—';
-      // Sync debug button state
       esp32Debug = !!s.debug;
       updateDebugBtn();
+      // Multi-trottinettes
+      if (s.selected_scooter) selectedScooterIdLocal = s.selected_scooter;
+      const countEl = document.getElementById('scooter-count');
+      if (countEl) countEl.textContent = s.scooter_count || 0;
     })
     .catch(() => {});
+  // Charger la liste des trottinettes
+  fetchScooters();
+}
+
+// ─── Multi-trottinettes ─────────────────────────────────────────────────────
+function fetchScooters() {
+  authFetch('/api/scooters')
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(list => updateScooterList(list))
+    .catch(() => {});
+}
+
+function updateScooterList(list) {
+  const select = document.getElementById('scooter-select');
+  const countEl = document.getElementById('scooter-count');
+  if (!select) return;
+
+  // Garder la sélection actuelle
+  const currentVal = select.value;
+  select.innerHTML = '';
+
+  if (list.length === 0) {
+    select.innerHTML = '<option value="">Aucune</option>';
+    selectedScooterIdLocal = null;
+  } else {
+    for (const s of list) {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      const shortId = s.name || s.id.split(':').slice(-2).join(':');
+      const status = s.connected ? '' : ' [hors ligne]';
+      opt.textContent = `${shortId}${status}`;
+      opt.selected = s.selected;
+      if (s.selected) selectedScooterIdLocal = s.id;
+      select.appendChild(opt);
+    }
+  }
+
+  if (countEl) countEl.textContent = list.length;
+  setDot('dot-ws', list.some(s => s.selected && s.connected) ? 'on' : 'err');
+
+  // Mettre à jour les marqueurs : retirer ceux qui ne sont plus connectés
+  const connectedIds = new Set(list.filter(s => s.connected).map(s => s.id));
+  for (const id of scooterMarkers.keys()) {
+    if (!connectedIds.has(id)) removeScooterMarker(id);
+  }
+  // Mettre à jour les positions de toutes les trottinettes connectées
+  for (const s of list) {
+    if (s.connected && s.telemetry.lat && s.telemetry.lon) {
+      updateScooterMarker(s.id, s.telemetry.lat, s.telemetry.lon);
+    }
+  }
+  refreshMarkerColors();
+}
+
+async function selectScooter(id) {
+  try {
+    const r = await authFetch('/api/scooters/select', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id })
+    });
+    if (r.ok) {
+      selectedScooterIdLocal = id;
+      refreshMarkerColors();
+      fetchStatus();
+    }
+  } catch (_) {}
 }
 
 // ─── Commandes manuelles ──────────────────────────────────────────────────────
