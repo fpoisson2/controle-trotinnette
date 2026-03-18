@@ -66,16 +66,13 @@ const WHISPER_URL    = process.env.WHISPER_URL    || 'http://localhost:10300';
 const OLLAMA_URL     = process.env.OLLAMA_URL     || 'http://localhost:11434';
 const OLLAMA_MODEL   = process.env.OLLAMA_MODEL   || 'qwen3:8b';
 const PIPER_URL      = process.env.PIPER_URL      || 'http://localhost:5000';
-const SCOOTER_WS     = process.env.SCOOTER_WS     || 'ws://localhost:8080';
 const PORT           = parseInt(process.env.PROXY_PORT || '3000', 10);
 
 // ─── État global ─────────────────────────────────────────────────────────────
 let sseClients        = [];        // res objects des clients SSE (navigateur)
 let esp32Ws           = null;      // WebSocket ESP32 (/ws-esp32)
 let openaiWs          = null;      // WebSocket vers OpenAI Realtime
-let scooterWs         = null;      // WebSocket vers la trottinette
 let openaiConnected   = false;
-let scooterConnected  = false;
 let lastTelemetry     = { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0 };
 
 // ─── Broadcast vers navigateurs (SSE) + ESP32 (WS) ───────────────────────────
@@ -139,37 +136,6 @@ const TELEMETRY_TOOL_SCHEMA = {
   }
 };
 
-// ─── Backend trottinette ─────────────────────────────────────────────────────
-function connectScooter() {
-  console.log(`[scooter] connexion vers ${SCOOTER_WS}`);
-  scooterWs = new WebSocket(SCOOTER_WS);
-
-  scooterWs.on('open', () => {
-    scooterConnected = true;
-    console.log('[scooter] connecté');
-  });
-
-  scooterWs.on('message', (data) => {
-    // Télémétrie reçue de la trottinette → stockée + relayée aux clients SSE
-    try {
-      const msg = JSON.parse(data.toString());
-      lastTelemetry = { ...lastTelemetry, ...msg };
-      broadcastSSE({ type: 'telemetry', ...msg });
-    } catch (_) { /* ignore */ }
-  });
-
-  scooterWs.on('close', () => {
-    scooterConnected = false;
-    console.log('[scooter] déconnecté – reconnexion dans 3 s');
-    setTimeout(connectScooter, 3000);
-  });
-
-  scooterWs.on('error', (err) => {
-    console.error('[scooter] erreur :', err.message);
-    scooterWs.close();
-  });
-}
-
 function sendScooterCmd(action, intensity) {
   const cmd = { type: 'cmd', action };
   if (intensity !== undefined) cmd.intensity = intensity;
@@ -177,11 +143,6 @@ function sendScooterCmd(action, intensity) {
   // Diffusion SSE aux clients web
   broadcastSSE({ type: 'cmd', action, intensity: intensity ?? null });
 
-  if (scooterWs && scooterWs.readyState === WebSocket.OPEN) {
-    scooterWs.send(JSON.stringify(cmd));
-  } else {
-    console.warn('[scooter] impossible d\'envoyer la commande : non connecté');
-  }
 }
 
 // ─── Mode cloud : OpenAI Realtime ─────────────────────────────────────────────
@@ -562,7 +523,7 @@ app.get('/status', (req, res) => {
   res.json({
     mode: USE_LOCAL_AI ? 'local' : 'cloud',
     openai_connected: USE_LOCAL_AI ? null : openaiConnected,
-    scooter_connected: scooterConnected || esp32Connected
+    scooter_connected: esp32Connected
   });
 });
 
@@ -619,5 +580,4 @@ server.listen(PORT, () => {
   console.log(`[proxy] mode IA : ${USE_LOCAL_AI ? 'local' : 'cloud'}`);
 });
 
-connectScooter();
 if (!USE_LOCAL_AI) connectOpenAI();

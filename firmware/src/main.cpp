@@ -31,7 +31,6 @@ static uint16_t currentThrottle = FTESC_THROTTLE_NEUTRAL;
 static uint8_t  currentGear     = FTESC_GEAR_HIGH;
 static bool     brakeLightOn    = false;
 
-// Calibration ADC au repos (mesurée au démarrage)
 static int throttleAdcMin = THROTTLE_ADC_MIN;
 static int brakeAdcMin    = BRAKE_ADC_MIN;
 
@@ -325,7 +324,6 @@ void setup() {
     // Boutons manette gear (actif LOW)
     pinMode(GEAR_R_PIN, INPUT_PULLUP);
     pinMode(GEAR_L_PIN, INPUT_PULLUP);
-    pinMode(GEAR_M_PIN, INPUT_PULLUP);
     pinMode(GEAR_H_PIN, INPUT_PULLUP);
 
     connectWiFi();
@@ -369,17 +367,15 @@ void setup() {
         delay(30);
     }
 
-    // Auto-calibration ADC : mesure la valeur au repos sur 100 échantillons (1 s)
-    Serial.println("[cal] calibration ADC au repos...");
-    long tSum = 0, bSum = 0;
+    Serial.println("[cal] calibration throttle au repos...");
+    long tSum = 0;
     for (int i = 0; i < 100; i++) {
         tSum += analogRead(THROTTLE_ADC_PIN);
-        bSum += analogRead(BRAKE_ADC_PIN);
         delay(10);
     }
     throttleAdcMin = (int)(tSum / 100);
-    brakeAdcMin    = (int)(bSum / 100);
-    Serial.printf("[cal] thr_min=%d brk_min=%d\n", throttleAdcMin, brakeAdcMin);
+    // brakeAdcMin : valeur fixe config.h (GPIO39 stable, pas de circuit parasite)
+    Serial.printf("[cal] thr_min=%d brk_min=%d (fixe)\n", throttleAdcMin, brakeAdcMin);
 
     Serial.println("[setup] prêt — appuyer sur le bouton pour activer le micro");
 }
@@ -399,7 +395,7 @@ void loop() {
     if (gH) currentGear = FTESC_GEAR_HIGH;
     else if (gL) currentGear = FTESC_GEAR_LOW;
     if (currentGear != prevGear) {
-        Serial.printf("[gear] L=%d M=%d H=%d → gear=%d\n", gL, gM, gH, currentGear);
+        Serial.printf("[gear] L=%d H=%d → gear=%d\n", gL, gH, currentGear);
         prevGear = currentGear;
     }
 
