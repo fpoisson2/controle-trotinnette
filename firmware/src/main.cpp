@@ -163,7 +163,7 @@ static bool connectWiFi() {
 
     uint32_t t = millis();
     while (WiFi.status() != WL_CONNECTED) {
-        if (millis() - t > 15000) {
+        if (millis() - t > 10000) {
             Serial.println("[wifi] timeout");
             WiFi.disconnect(true);
             return false;

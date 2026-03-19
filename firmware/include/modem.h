@@ -12,12 +12,11 @@
 
 #if LTE_ENABLED
 
-// Définir le modèle de modem AVANT d'inclure TinyGSM
-// SIM7670E est compatible avec le driver SIM7600
-#define TINY_GSM_MODEM_SIM7600
+// Le modèle TINY_GSM_MODEM_A7670 est défini via build_flags dans platformio.ini
 #include <TinyGsmClient.h>
 
 // ── Instance globale du modem ────────────────────────────────────────────────
+// Serial1 est initialisé dans modemInit() avant utilisation
 static TinyGsm       _modem(MODEM_UART);
 static TinyGsmClient _modemClient(_modem);
 
@@ -37,40 +36,65 @@ static bool _modemConnected   = false;
 static bool modemInit() {
     Serial.println("[modem] initialisation SIM7670E...");
 
-    // Configurer les pins
-    if (MODEM_PWRKEY_PIN >= 0) {
-        pinMode(MODEM_PWRKEY_PIN, OUTPUT);
-        digitalWrite(MODEM_PWRKEY_PIN, LOW);
-    }
-    if (MODEM_DTR_PIN >= 0) {
-        pinMode(MODEM_DTR_PIN, OUTPUT);
-        digitalWrite(MODEM_DTR_PIN, LOW);  // Mode actif (pas en veille)
-    }
+    // Alimenter le modem via BOARD_POWERON_PIN (GPIO 12)
+#ifdef BOARD_POWERON_PIN
+    pinMode(BOARD_POWERON_PIN, OUTPUT);
+    digitalWrite(BOARD_POWERON_PIN, HIGH);
+    Serial.println("[modem] BOARD_POWERON_PIN HIGH");
+#endif
+
+    // DTR LOW = mode actif (pas en veille)
+    pinMode(MODEM_DTR_PIN, OUTPUT);
+    digitalWrite(MODEM_DTR_PIN, LOW);
+
+    // Reset modem (séquence officielle LilyGO — RESET_LEVEL=HIGH pour T-A7670)
+#ifdef MODEM_RESET_PIN
+    pinMode(MODEM_RESET_PIN, OUTPUT);
+    digitalWrite(MODEM_RESET_PIN, LOW);   // !MODEM_RESET_LEVEL
+    delay(100);
+    digitalWrite(MODEM_RESET_PIN, HIGH);  // MODEM_RESET_LEVEL = pulse reset
+    delay(2600);
+    digitalWrite(MODEM_RESET_PIN, LOW);   // !MODEM_RESET_LEVEL
+    Serial.println("[modem] reset effectué");
+#endif
 
     // Initialiser l'UART du modem
     MODEM_UART.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX_PIN, MODEM_TX_PIN);
     delay(100);
 
-    // Pulse PWRKEY pour allumer le modem
-    if (MODEM_PWRKEY_PIN >= 0) {
-        Serial.println("[modem] pulse PWRKEY (allumage)...");
-        digitalWrite(MODEM_PWRKEY_PIN, LOW);
-        delay(100);
-        digitalWrite(MODEM_PWRKEY_PIN, HIGH);
-        delay(1000);
-        digitalWrite(MODEM_PWRKEY_PIN, LOW);
-    }
+    // Pulse PWRKEY pour allumer le modem (séquence officielle LilyGO)
+    pinMode(MODEM_PWRKEY_PIN, OUTPUT);
+    digitalWrite(MODEM_PWRKEY_PIN, LOW);
+    delay(100);
+    digitalWrite(MODEM_PWRKEY_PIN, HIGH);
+    delay(MODEM_POWERON_PULSE_WIDTH_MS);
+    digitalWrite(MODEM_PWRKEY_PIN, LOW);
+    Serial.println("[modem] pulse PWRKEY envoyé");
 
-    // Attendre le boot du modem (5 secondes max)
-    Serial.println("[modem] attente boot modem (5s)...");
-    delay(5000);
-
-    // Tester la communication AT
-    Serial.println("[modem] test AT...");
-    if (!_modem.testAT(5000)) {
-        Serial.println("[modem] ERREUR : pas de réponse AT");
-        return false;
+    // Attendre et tester AT (comme l'exemple LilyGO : re-pulse PWRKEY après 30 essais)
+    Serial.println("[modem] attente réponse AT...");
+    uint32_t atStart = millis();
+    int retry = 0;
+    while (!_modem.testAT(1000)) {
+        Serial.print(".");
+        if (retry++ > 30) {
+            // Re-pulse PWRKEY (le modem n'a peut-être pas démarré)
+            Serial.println("\n[modem] re-pulse PWRKEY...");
+            digitalWrite(MODEM_PWRKEY_PIN, LOW);
+            delay(100);
+            digitalWrite(MODEM_PWRKEY_PIN, HIGH);
+            delay(MODEM_POWERON_PULSE_WIDTH_MS);
+            digitalWrite(MODEM_PWRKEY_PIN, LOW);
+            retry = 0;
+        }
+        if (millis() - atStart > 60000) {
+            Serial.println("\n[modem] ERREUR : pas de réponse AT après 60s");
+            return false;
+        }
     }
+    Serial.printf("\n[modem] AT OK après %lu ms\n", millis() - atStart);
+
+    at_ok:
 
     // Initialiser le modem (reset + config de base)
     Serial.println("[modem] init()...");
