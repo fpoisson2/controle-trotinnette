@@ -641,6 +641,20 @@ app.post('/cmd', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── POST /api/music — contrôle musique sur la trottinette sélectionnée ──
+app.post('/api/music', (req, res) => {
+  const selected = getSelectedScooter();
+  if (!selected) return res.status(503).json({ error: 'Aucune trottinette connectée' });
+  const { action, track } = req.body;
+  if (!action) return res.status(400).json({ error: 'action requise (play|pause|next|prev|stop)' });
+  const msg = { type: 'music', action };
+  if (track !== undefined) msg.track = track;
+  if (selected.ws.readyState === WebSocket.OPEN) {
+    selected.ws.send(JSON.stringify(msg));
+  }
+  res.json({ ok: true });
+});
+
 // ── POST /debug — activer/désactiver le mode debug sur la trottinette sélectionnée ──
 app.post('/debug', (req, res) => {
   const selected = getSelectedScooter();
@@ -1286,6 +1300,8 @@ esp32Wss.on('connection', (ws) => {
             type: 'input_audio_buffer.append',
             audio: Buffer.from(data).toString('base64')
           }));
+        } else {
+          console.warn(`[audio] openaiWs pas prêt (state=${openaiWs?.readyState}, connected=${openaiConnected})`);
         }
         // Relayer le PCM brut aux clients debug-audio (trottinette sélectionnée seulement)
         for (const c of debugAudioClients) {

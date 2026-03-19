@@ -805,6 +805,28 @@
         <span id="intensity-val">50%</span>
       </div>
     </div>
+
+    <!-- Music controls -->
+    <div class="manual-controls" id="music-panel">
+      <div class="controls-title">Musique</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <select id="music-track" style="flex:1;background:var(--surface-raised);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 8px;font-size:12px;font-weight:600">
+          <option value="0">Super Mario</option>
+          <option value="1">Tetris</option>
+          <option value="2">Star Wars</option>
+          <option value="3">Fur Elise</option>
+          <option value="4">Nokia Tune</option>
+          <option value="5">Jingle Bells</option>
+        </select>
+      </div>
+      <div class="btn-row" style="gap:6px">
+        <button class="btn forward" onclick="musicCmd('prev')" style="flex:1;font-size:11px">⏮</button>
+        <button class="btn forward" onclick="musicCmd('play')" style="flex:2;font-size:11px">▶ JOUER</button>
+        <button class="btn brake" onclick="musicCmd('pause')" style="flex:1;font-size:11px">⏸</button>
+        <button class="btn stop" onclick="musicCmd('stop')" style="flex:1;font-size:11px">⏹</button>
+        <button class="btn forward" onclick="musicCmd('next')" style="flex:1;font-size:11px">⏭</button>
+      </div>
+    </div>
   </div>
 
   <!-- Right column -->
@@ -1514,6 +1536,16 @@ function sendCmd(action) {
   authFetch('/cmd', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, intensity: getIntensity() })
+  }).catch(console.error);
+}
+
+// ── Musique ──────────────────────────────────────────────────────────────────
+function musicCmd(action) {
+  const body = { action };
+  if (action === 'play') body.track = parseInt(document.getElementById('music-track').value);
+  authFetch('/api/music', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
   }).catch(console.error);
 }
 
