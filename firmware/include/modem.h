@@ -12,13 +12,14 @@
 
 #if LTE_ENABLED
 
-// Le modèle TINY_GSM_MODEM_A7670 est défini via build_flags dans platformio.ini
+// TINY_GSM_MODEM_A76XXSSL défini via build_flags → active TinyGsmClientSecure
 #include <TinyGsmClient.h>
 
-// ── Instance globale du modem ────────────────────────────────────────────────
+// ── Instances globales du modem (utilisées par WebSocketsNetworkClientSecure) ─
 // Serial1 est initialisé dans modemInit() avant utilisation
-static TinyGsm       _modem(MODEM_UART);
-static TinyGsmClient _modemClient(_modem);
+TinyGsm              _modem(MODEM_UART);
+TinyGsmClient        _modemClient(_modem, 0);
+TinyGsmClientSecure  _modemClientSSL(_modem, 1);
 
 // ── Drapeaux d'état ──────────────────────────────────────────────────────────
 static bool _modemInitialized = false;

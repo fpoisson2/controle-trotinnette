@@ -67,6 +67,9 @@ static void wsLog(const char *fmt, ...) {
 // ─────────────────────────────────────────────────────────────────────────────
 static volatile bool voiceActive = false;
 
+// Flag global pour le bridge réseau WiFi/LTE (utilisé par WebSocketsNetworkClientSecure)
+volatile bool _wsUseLte = false;
+
 // ── Verrouillage à distance (libre-service) ──
 // Quand locked=true, le throttle est forcé au neutre (ESC ne répond pas)
 static volatile bool scooterLocked = false;  // déverrouillée au boot (debug)
@@ -433,6 +436,10 @@ static void taskCapture(void *) {
         }
         wasActive = nowActive;
 #else
+        // Traiter les URCs du modem LTE (données entrantes SSL)
+#if LTE_ENABLED
+        if (_wsUseLte) _modem.maintain();
+#endif
         wsProxy.loop();  // maintenir connexion + recevoir réponses IA (Core1 seulement)
 
         // Envoyer télémétrie en attente (écrit par Core0, envoyé ici sur Core1)
@@ -764,8 +771,11 @@ void setup() {
         if (modemInit()) {
             Serial.println("[lte] modem initialisé");
             if (modemConnect()) {
-                Serial.println("[lte] connecté via LTE");
+                Serial.println("[lte] connecté via LTE — désactivation WiFi");
+                WiFi.disconnect(true);
+                WiFi.mode(WIFI_OFF);
                 connSetType(CONN_LTE);
+                _wsUseLte = true;
             } else {
                 Serial.println("[lte] connexion LTE échouée — reboot");
                 ESP.restart();
@@ -860,7 +870,7 @@ void setup() {
 
 void loop() {
     ArduinoOTA.handle();
-    wsServer.loop();
+    if (!_wsUseLte) wsServer.loop();  // pas de serveur local en mode LTE
 
     // ── Sons différés (posés par handlers WiFi/proxy, joués ici dans loop) ────
     {
@@ -969,7 +979,7 @@ void loop() {
 #endif
 
     // Reconnexion WiFi : backoff exponentiel 2s → 4s → 8s → … → 30s max, reboot après 20 échecs
-    if (wifiLost && millis() >= wifiRetryAt) {
+    if (wifiLost && !_wsUseLte && millis() >= wifiRetryAt) {
         wifiRetryCount++;
         wsLog("[wifi] tentative reconnexion #%d (prochain essai dans %lu ms)\n",
                       wifiRetryCount, (unsigned long)wifiRetryDelay);
