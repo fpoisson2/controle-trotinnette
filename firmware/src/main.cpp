@@ -123,6 +123,9 @@ static uint32_t outOfRangeStart    = 0;
 static uint32_t lastWifiActivity   = 0;
 static bool     alertTonePlayed    = false;
 
+// ── Sons différés (flags posés par les handlers, joués dans loop) ────────────
+static volatile uint8_t pendingBeep = 0;  // 0=rien, 1=wifi ok, 2=wifi lost, 3=proxy ok, 4=proxy lost
+
 // ── MAC address (cache) ──────────────────────────────────────────────────────
 static uint8_t macAddr[6];
 
@@ -149,8 +152,8 @@ static void wifiBegin() {
 #endif
 }
 
-// Connexion bloquante au boot uniquement
-static void connectWiFi() {
+// Connexion bloquante au boot — retourne true si WiFi connecté, false sinon
+static bool connectWiFi() {
 #if WIFI_ENTERPRISE
     Serial.println("[wifi] mode WPA2-Enterprise (EAP-PEAP)...");
 #else
@@ -160,9 +163,10 @@ static void connectWiFi() {
 
     uint32_t t = millis();
     while (WiFi.status() != WL_CONNECTED) {
-        if (millis() - t > 30000) {
-            Serial.println("[wifi] timeout — reboot");
-            ESP.restart();
+        if (millis() - t > 15000) {
+            Serial.println("[wifi] timeout");
+            WiFi.disconnect(true);
+            return false;
         }
         delay(500);
         Serial.print(".");
@@ -191,6 +195,7 @@ static void connectWiFi() {
     });
     ArduinoOTA.begin();
     wsLog("[ota] prêt — hostname: %s\n", OTA_HOSTNAME);
+    return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -203,7 +208,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
             wsProxyConnected = true;
             lastWifiActivity = millis();
             Serial.println("[ws-proxy] connecté à " PROXY_HOST);
-            audioBeepProxyOk();
+            pendingBeep = 3;  // proxy ok (joué dans loop)
             wsLog("[ws-proxy] connecté");
             // Envoyer la version firmware + MAC au proxy
             {
@@ -220,7 +225,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
         case WStype_DISCONNECTED:
             wsProxyConnected = false;
             Serial.println("[ws-proxy] déconnecté — reconnexion auto");
-            audioBeepProxyLost();
+            pendingBeep = 4;  // proxy lost (joué dans loop)
             wsLog("[ws-proxy] déconnecté — reconnexion auto");
             break;
 
@@ -300,6 +305,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 }
 
                 wsLog("[cmd] %s @ %.2f\n", lastAction.c_str(), lastIntensity);
+                audioBeep(600.0f, 30);  // bip court : commande reçue
 
                 // Cmd 02H : throttle 0-1023, 512=neutre
                 if (lastAction == "avancer") {
@@ -729,13 +735,13 @@ void setup() {
         if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
             wifiLost    = true;
             wifiRetryAt = 0;  // retry immédiat
-            audioBeepWifiLost();
+            pendingBeep = 2;  // wifi lost (joué dans loop)
             wsLog("[wifi] déconnecté (event)");
         } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
             wifiLost       = false;
             wifiRetryDelay = 2000;
             wifiRetryCount = 0;
-            audioBeepWifiOk();
+            pendingBeep = 1;  // wifi ok (joué dans loop)
             lastWifiActivity = millis();
             wsLog("[wifi] reconnecté : %s\n", WiFi.localIP().toString().c_str());
             // Ré-enregistrer mDNS après reconnexion
@@ -747,9 +753,34 @@ void setup() {
         }
     });
 
-    connectWiFi();
-    lastWifiActivity = millis();
-    connSetType(CONN_WIFI);  // Informer le gestionnaire de connectivité
+    bool wifiOk = connectWiFi();
+    if (wifiOk) {
+        lastWifiActivity = millis();
+        connSetType(CONN_WIFI);
+    }
+#if LTE_ENABLED
+    if (!wifiOk) {
+        Serial.println("[lte] WiFi échoué — tentative LTE...");
+        if (modemInit()) {
+            Serial.println("[lte] modem initialisé");
+            if (modemConnect()) {
+                Serial.println("[lte] connecté via LTE");
+                connSetType(CONN_LTE);
+            } else {
+                Serial.println("[lte] connexion LTE échouée — reboot");
+                ESP.restart();
+            }
+        } else {
+            Serial.println("[lte] init modem échouée — reboot");
+            ESP.restart();
+        }
+    }
+#else
+    if (!wifiOk) {
+        Serial.println("[wifi] pas de fallback LTE — reboot");
+        ESP.restart();
+    }
+#endif
 
     Serial2.begin(ESC_BAUD, SERIAL_8N1, ESC_RX_PIN, ESC_TX_PIN);
     wsLog("[esc] Flipsky UART initialisé");
@@ -831,6 +862,19 @@ void loop() {
     ArduinoOTA.handle();
     wsServer.loop();
 
+    // ── Sons différés (posés par handlers WiFi/proxy, joués ici dans loop) ────
+    {
+        uint8_t beep = pendingBeep;
+        if (beep) {
+            pendingBeep = 0;
+            switch (beep) {
+                case 1: audioBeepWifiOk();    break;
+                case 2: audioBeepWifiLost();  break;
+                case 3: audioBeepProxyOk();   break;
+                case 4: audioBeepProxyLost(); break;
+            }
+        }
+    }
 
     // ── Gear-R = push-to-talk : tenir = micro actif, relâcher = inactif ────────
     // Anti-rebond 300 ms : filtre les pulses RTS du chip USB-série sur GPIO2
