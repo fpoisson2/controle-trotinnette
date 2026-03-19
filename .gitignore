@@ -9,6 +9,9 @@ node_modules/
 firmware/.pio/
 firmware/.vscode/
 
+# Claude Code
+.claude/
+
 # Données locales (SQLite, fleet registry)
 data/
 
