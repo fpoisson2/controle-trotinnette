@@ -1,0 +1,191 @@
+#pragma once
+// ─────────────────────────────────────────────────────────────────────────────
+//  config.h.fleet — Configuration pour deploiement flotte campus
+//  Copier vers config.h avant la compilation fleet :
+//      cp firmware/include/config.h.fleet firmware/include/config.h
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Version firmware ─────────────────────────────────────────────────────────
+#define FW_VERSION  "1.5.0-fleet"
+
+// ── Flags de production ────────────────────────────────────────────────────
+// FAKE_TELEMETRY desactive : telemetrie reelle via ESC Flipsky
+#define FAKE_TELEMETRY   false
+// AUDIO_LOOPBACK desactive en production
+#define AUDIO_LOOPBACK   false
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  WiFi — WPA2-Enterprise (eduroam / reseau campus Cegep Limoilou)
+// ─────────────────────────────────────────────────────────────────────────────
+#define WIFI_SSID           "eduroam"
+#define WIFI_PASSWORD       ""          // Non utilise en mode Enterprise
+
+// Mode WPA2-Enterprise (EAP-PEAP) — reseau Cegep Limoilou
+#define WIFI_ENTERPRISE     1           // 1 = WPA2-Enterprise active
+#define EAP_IDENTITY        "trottinette@cegepl.ca"     // *** A CONFIGURER ***
+#define EAP_USERNAME        "trottinette@cegepl.ca"     // *** A CONFIGURER ***
+#define EAP_PASSWORD        "CHANGEZ_MOI"               // *** A CONFIGURER ***
+
+// Timeout de connexion WiFi au boot (ms) — plus long pour Enterprise
+#define WIFI_TIMEOUT_MS     20000
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Proxy WebSocket (serveur distant via Cloudflare tunnel)
+// ─────────────────────────────────────────────────────────────────────────────
+#define PROXY_HOST          "trottinette.cegeplimoilou.ca"
+#define PROXY_PORT          443
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Audio — Microphone I2S MEMS (SPH0645 / ICS-43434)
+// ─────────────────────────────────────────────────────────────────────────────
+#define MIC_BCLK_PIN        18    // I2S bit clock
+#define MIC_LRCLK_PIN       19    // I2S word select (L/R clock)
+#define MIC_DATA_PIN        34    // I2S data in (GPIO 34 = input-only, OK)
+
+#define MIC_SAMPLE_RATE     16000   // 16 kHz pour reconnaissance vocale
+#define SPK_SAMPLE_RATE     24000   // 24 kHz pour synthese vocale IA
+
+#define MIC_CHUNK_SAMPLES   512     // Samples par chunk I2S (~32 ms a 16 kHz)
+#define MIC_GAIN            12      // Gain numerique applique au PCM brut
+#define VOLUME_GAIN         2.5f    // Gain de volume pour la sortie DAC
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Audio — Haut-parleur DAC
+// ─────────────────────────────────────────────────────────────────────────────
+#define SPK_DAC_PIN         25    // DAC1 natif ESP32 (GPIO 25)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Manette (throttle) et frein — ADC
+// ─────────────────────────────────────────────────────────────────────────────
+#define THROTTLE_ADC_PIN    32    // Capteur Hall manette (ADC1_CH4)
+#define BRAKE_ADC_PIN       39    // Capteur Hall frein   (ADC1_CH3, input-only)
+
+#define THROTTLE_ADC_MIN    0     // Valeur ADC au repos (recalibree au boot)
+#define THROTTLE_ADC_MAX    4095  // Valeur ADC pleine course
+#define BRAKE_ADC_MIN       0     // Valeur ADC frein au repos
+#define BRAKE_ADC_MAX       4095  // Valeur ADC frein pleine course
+
+#define THROTTLE_DEADZONE   100   // Zone morte (hysterese ON > MIN+100, OFF < MIN+50)
+#define BRAKE_DEADZONE      100   // Zone morte frein
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Bouton vocal / PTT (Push-To-Talk)
+// ─────────────────────────────────────────────────────────────────────────────
+#define VOICE_BTN_PIN       2     // Bouton PTT principal (actif LOW, pull-up interne)
+#define GEAR_R_PIN          2     // Alias pour le bouton PTT (meme GPIO)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ESC Flipsky — UART
+// ─────────────────────────────────────────────────────────────────────────────
+#define ESC_RX_PIN          14    // UART2 RX (ESP32 recoit de l'ESC)
+#define ESC_TX_PIN          13    // UART2 TX (ESP32 envoie vers l'ESC)
+#define ESC_BAUD            115200
+#define ESC_POLE_PAIRS      15    // Paires de poles du moteur (conversion RPM->vitesse)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  WebSocket serveur local (telemetrie directe sur le reseau WiFi)
+// ─────────────────────────────────────────────────────────────────────────────
+#define WS_SERVER_PORT      8080
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Telemetrie et commandes IA
+// ─────────────────────────────────────────────────────────────────────────────
+#define TELEMETRY_MS        500     // Intervalle d'envoi telemetrie (ms)
+#define AI_CMD_PRIORITY_MS  8000    // Duree priorite IA sur manette physique (ms)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  OTA (mise a jour sans fil)
+// ─────────────────────────────────────────────────────────────────────────────
+#define OTA_HOSTNAME        "trottinette"
+#define OTA_PASSWORD        "ota1234"
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Modem LTE — SIM7670E (LilyGO T-A7670E integre)
+// ─────────────────────────────────────────────────────────────────────────────
+// LTE desactive pour la flotte campus : WiFi eduroam est le lien principal
+#define LTE_ENABLED         false
+
+#define MODEM_UART          Serial1
+#define MODEM_BAUD          115200
+#define MODEM_TX_PIN        26      // ESP32 TX -> modem RX
+#define MODEM_RX_PIN        27      // ESP32 RX <- modem TX
+#define MODEM_PWRKEY_PIN    4       // Pin PWRKEY pour allumer/eteindre le modem
+#define MODEM_DTR_PIN       (-1)    // Pin DTR (non utilise)
+#define MODEM_RING_PIN      33      // Pin RING (notification appel/SMS)
+
+// ── APN cellulaire ───────────────────────────────────────────────────────────
+#define LTE_APN             "internet"
+
+// ── Timeouts de connexion ────────────────────────────────────────────────────
+#define LTE_CONNECT_TIMEOUT_MS   30000
+#define CONN_CHECK_INTERVAL_MS   5000
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Ecran OLED — SSD1306 128x64 I2C
+// ─────────────────────────────────────────────────────────────────────────────
+// OLED active pour la flotte : affiche etat, MAC, QR, erreurs
+#define OLED_ENABLED        true
+
+#define OLED_SDA_PIN        21      // I2C SDA
+#define OLED_SCL_PIN        22      // I2C SCL
+#define OLED_I2C_ADDR       0x3C    // Adresse I2C de l'ecran
+#define OLED_WIDTH          128     // Largeur en pixels
+#define OLED_HEIGHT         64      // Hauteur en pixels
+#define OLED_REFRESH_MS     500     // Intervalle de rafraichissement (ms)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Boutons physiques (ecran + verrouillage)
+// ─────────────────────────────────────────────────────────────────────────────
+#define BTN_LOCK_PIN        15      // Bouton verrouillage/deverrouillage
+#define BTN_PAGE_PIN        0       // Bouton changement de page OLED
+#define BTN_DEBOUNCE_MS     200     // Anti-rebond (ms)
+#define BTN_LONG_PRESS_MS   1000    // Seuil appui long (ms)
+#define DISPLAY_AUTO_RETURN_MS  10000  // Retour auto a la page principale (ms)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Batterie
+// ─────────────────────────────────────────────────────────────────────────────
+#define BATT_VOLTAGE_MIN    33.0f   // Tension minimale batterie (V) — alerte
+#define BATT_VOLTAGE_MAX    42.0f   // Tension maximale batterie (V) — 100%
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Deep sleep et gestion d'energie multi-niveaux
+// ─────────────────────────────────────────────────────────────────────────────
+// Transitions fleet : ACTIVE -> IDLE_LIGHT (1min) -> IDLE_DEEP (5min) -> SLEEP (15min)
+// Timeouts plus agressifs que le dev pour economiser la batterie en libre-service
+#define IDLE_LIGHT_TIMEOUT_MS   60000     // 1 min -> mode veille legere
+#define IDLE_DEEP_TIMEOUT_MS    300000    // 5 min -> mode veille profonde partielle
+#define SLEEP_TIMEOUT_MS        900000    // 15 min -> deep sleep ESP32
+
+// Heartbeat en deep sleep (reveil timer periodique)
+#define SLEEP_HEARTBEAT_SEC     180       // 3 minutes entre chaque reveil (fleet)
+
+// Seuil ADC pour reveil par manette
+#define THROTTLE_WAKE_THRESHOLD 50
+
+// Jingle de demarrage (frequences Hz)
+#define BOOT_JINGLE_FREQ_1      523       // Do5
+#define BOOT_JINGLE_FREQ_2      659       // Mi5
+#define BOOT_JINGLE_DURATION_MS 100       // Duree de chaque note (ms)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  LoRa 915 MHz — Module RYLR896 via UART (commandes AT)
+// ─────────────────────────────────────────────────────────────────────────────
+// LoRa desactive pour la Phase 1 campus (WiFi eduroam suffisant)
+// Activer en Phase 2 pour la redondance hors couverture WiFi
+#define LORA_ENABLED        false
+
+#define LORA_TX_PIN         15      // ESP32 TX -> module LoRa RX
+#define LORA_RX_PIN         33      // ESP32 RX <- module LoRa TX
+#define LORA_BAUD           115200  // Debit UART du module LoRa
+#define LORA_SEND_INTERVAL_MS   10000   // Intervalle d'envoi telemetrie LoRa (ms)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Triple redondance — Watchdog connectivite
+// ─────────────────────────────────────────────────────────────────────────────
+#define WIFI_LINK_TIMEOUT_MS    10000   // WiFi : 10 s
+#define LTE_LINK_TIMEOUT_MS     15000   // LTE  : 15 s
+#define LORA_LINK_TIMEOUT_MS    30000   // LoRa : 30 s
+
+// Grace supplementaire avant de declarer HORS ZONE (tous liens perdus)
+#define WATCHDOG_GRACE_MS       5000    // 5 s de grace apres perte du dernier lien

@@ -8,3 +8,10 @@ node_modules/
 # PlatformIO
 firmware/.pio/
 firmware/.vscode/
+
+# Données locales (SQLite, fleet registry)
+data/
+
+# Provisionnement
+tools/qr/
+tools/provision_report.csv

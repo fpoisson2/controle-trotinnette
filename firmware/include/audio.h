@@ -24,9 +24,9 @@
 #define DAC_RING_SIZE  32768   // ~1.36 s à 24 kHz (power of 2 pour masque rapide)
 #define DAC_RING_MASK  (DAC_RING_SIZE - 1)
 
-static volatile uint8_t  dacRing[DAC_RING_SIZE];
-static volatile uint32_t dacHead = 0;   // index d'écriture
-static volatile uint32_t dacTail = 0;   // index de lecture (ISR)
+volatile uint8_t  dacRing[DAC_RING_SIZE];
+volatile uint32_t dacHead = 0;   // index d'écriture
+volatile uint32_t dacTail = 0;   // index de lecture (ISR)
 
 // ── Insérer des samples PCM16 dans le ring buffer ────────────────────────────
 // Non-bloquant : si le buffer est plein, attend brièvement par blocs, puis drop
@@ -69,13 +69,19 @@ static inline void IRAM_ATTR dacWriteFast(uint8_t val) {
     SET_PERI_REG_BITS(RTC_IO_PAD_DAC1_REG, RTC_IO_PDAC1_DAC, val, RTC_IO_PDAC1_DAC_S);
 }
 
+// Flag global : si true, l'ISR ne génère pas de silence quand le ring buffer
+// est vide — la musique écrit directement au DAC depuis loop().
+volatile bool dacMusicMode = false;
+
 void IRAM_ATTR onDacTimer() {
     if (dacHead != dacTail) {
         dacWriteFast(dacRing[dacTail]);
         dacTail = (dacTail + 1) & DAC_RING_MASK;
-    } else {
-        dacWriteFast(128);  // silence DC
+    } else if (!dacMusicMode) {
+        dacWriteFast(128);  // silence DC (seulement si pas en mode musique)
     }
+    // En mode musique avec buffer vide, on laisse le DAC tel quel
+    // (musicTick() gère la sortie directement)
 }
 
 // ── Initialisation I2S (microphone MEMS) ─────────────────────────────────────

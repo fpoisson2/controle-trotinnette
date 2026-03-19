@@ -13,6 +13,16 @@ const os       = require('os');
 const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
 
+// ─── Modules ajoutés ──────────────────────────────────────────────────────────
+const { initDB, registerScooter: dbRegisterScooter, updateScooterStatus, createRide: dbCreateRide, endRide: dbEndRide, addAuditLog } = require('./database');
+const authRoutes = require('./auth-routes');
+const { requireAuth: authRequireAuth, requireRole } = require('./auth-routes');
+const fleetRouter = require('./fleet');
+const { registerOnConnect: fleetRegisterOnConnect } = require('./fleet');
+
+// Initialiser la base de données SQLite
+initDB();
+
 // ─── Timestamps dans les logs ────────────────────────────────────────────────
 for (const method of ['log', 'warn', 'error']) {
   const orig = console[method].bind(console);
@@ -62,13 +72,15 @@ function recordFailedAttempt(ip) {
 function clearAttempts(ip) { loginAttempts.delete(ip); }
 
 // Middleware JWT — accepte le token en header ou en query param (pour EventSource)
+// Décode le payload dans req.user pour accéder au rôle et à l'identité
 function requireAuth(req, res, next) {
   const header = req.headers.authorization;
   const token  = (header?.startsWith('Bearer ') ? header.slice(7) : null)
                ?? req.query.token;
   if (!token) return res.status(401).json({ error: 'Non autorisé' });
   try {
-    jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
     next();
   } catch {
     res.status(401).json({ error: 'Token invalide ou expiré' });
@@ -505,10 +517,13 @@ app.use(express.raw({ type: 'application/octet-stream', limit: '10mb' }));
 
 // ── Routes publiques ──
 app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'landing.html'));
+});
+app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// ── POST /login ──
+// ── POST /login — rétro-compatible, vérifie DB puis AUTH_PASSWORD legacy ──
 app.post('/login', async (req, res) => {
   const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress;
   const { username, password } = req.body || {};
@@ -518,6 +533,23 @@ app.post('/login', async (req, res) => {
     return res.status(429).json({ error: `Trop de tentatives. Réessayer dans ${remaining} min.` });
   }
 
+  // 1) Vérifier dans la base de données (par email = username)
+  const { findUserByEmail } = require('./database');
+  const dbUser = findUserByEmail((username || '').toLowerCase());
+  if (dbUser && !dbUser.disabled) {
+    const validPass = await bcrypt.compare(password ?? '', dbUser.password_hash);
+    if (validPass) {
+      clearAttempts(ip);
+      addAuditLog(dbUser.id, 'login_legacy', dbUser.email, { ip });
+      const token = jwt.sign(
+        { sub: dbUser.id, email: dbUser.email, role: dbUser.role, display_name: dbUser.display_name, username: dbUser.email },
+        JWT_SECRET, { expiresIn: JWT_EXPIRY }
+      );
+      return res.json({ token });
+    }
+  }
+
+  // 2) Rétro-compatibilité : ancien système AUTH_PASSWORD
   const validUser = username === AUTH_USERNAME;
   const validPass = AUTH_PASSWORD_HASH
     ? await bcrypt.compare(password ?? '', AUTH_PASSWORD_HASH)
@@ -525,7 +557,7 @@ app.post('/login', async (req, res) => {
 
   if (!validUser || !validPass) {
     recordFailedAttempt(ip);
-    const attemptsLeft = MAX_ATTEMPTS - (rec.count + 1);
+    const attemptsLeft = MAX_ATTEMPTS - ((rec?.count || 0) + 1);
     return res.status(401).json({
       error: attemptsLeft > 0
         ? `Identifiants incorrects (${attemptsLeft} tentative${attemptsLeft > 1 ? 's' : ''} restante${attemptsLeft > 1 ? 's' : ''})`
@@ -534,7 +566,10 @@ app.post('/login', async (req, res) => {
   }
 
   clearAttempts(ip);
-  const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+  const token = jwt.sign(
+    { sub: 0, email: AUTH_USERNAME, role: 'admin', display_name: 'Administrateur', username },
+    JWT_SECRET, { expiresIn: JWT_EXPIRY }
+  );
   res.json({ token });
 });
 
@@ -572,6 +607,9 @@ app.post('/audio', async (req, res) => {
   }
   res.sendStatus(200);
 });
+
+// ── Monter les routes d'authentification (publiques : register, login) ──
+app.use(authRoutes);
 
 // ── Toutes les routes suivantes requièrent un JWT valide ──
 app.use(requireAuth);
@@ -776,6 +814,13 @@ app.get('/api/rides/active', (req, res) => {
   res.json(activeRides);
 });
 
+// ── Monter les routes de flotte (requièrent auth via le routeur interne) ──
+// Injecter les dépendances du proxy dans le routeur fleet
+fleetRouter._getLiveScooters = () => scooters;
+fleetRouter._broadcastSSE    = broadcastSSE;
+// flashFirmware sera injecté après sa définition (voir plus bas)
+app.use(fleetRouter);
+
 // ─── OTA via proxy : flashFirmware() partagé ──────────────────────────────────
 let otaInProgress = false;
 let otaResolve    = null;
@@ -844,6 +889,9 @@ function flashFirmware(firmware, targetId = null) {
     sendNextChunk();
   });
 }
+
+// Injecter flashFirmware dans le routeur fleet (après sa définition)
+fleetRouter._flashFirmware = flashFirmware;
 
 // POST /ota — upload manuel .bin
 app.post('/ota', async (req, res) => {
@@ -1247,6 +1295,20 @@ esp32Wss.on('connection', (ws) => {
           // Auto-sélection si c'est la première trottinette
           if (!selectedScooterId) selectedScooterId = scooterId;
           console.log(`[esp32-ws] enregistré: ${scooterId} (FW ${msg.version}) — verrouillée`);
+
+          // Enregistrer dans fleet.json et base SQLite
+          try {
+            fleetRegisterOnConnect(scooterId, msg.version || null);
+            // Récupérer le nom du registre fleet si disponible
+            const { getScooterInfo } = require('./fleet');
+            const fleetInfo = getScooterInfo(scooterId);
+            if (fleetInfo && fleetInfo.name) {
+              scooters.get(scooterId).name = fleetInfo.name;
+            }
+          } catch (err) {
+            console.error(`[esp32-ws] erreur enregistrement fleet/DB : ${err.message}`);
+          }
+
           // Envoyer l'état verrouillé à l'ESP32
           ws.send(JSON.stringify({ type: 'lock', locked: true }));
           // Notifier le dashboard
@@ -1277,6 +1339,18 @@ esp32Wss.on('connection', (ws) => {
           console.log(`[lock] ${scooterId} confirme: ${msg.locked ? 'verrouillée' : 'déverrouillée'}`);
           const entry = scooters.get(scooterId);
           if (entry) entry.locked = msg.locked;
+
+        } else if (msg.type === 'qc_result') {
+          // Résultat du test de contrôle qualité
+          console.log(`[qc] ${scooterId} résultat QC : ${msg.passed ? 'OK' : 'ÉCHEC'}`);
+          const { getFleet } = require('./fleet');
+          const fleetData = getFleet();
+          if (fleetData[scooterId]) {
+            const { renameScooter, setNotes } = require('./fleet');
+            // Mettre à jour le statut QC via accès direct au fleet
+            fleetData[scooterId].qcStatus = msg.passed ? 'passed' : 'failed';
+          }
+          broadcastSSE({ type: 'qc_result', scooterId, passed: msg.passed, details: msg.details || null });
         }
       } catch (_) { /* ignore */ }
     }

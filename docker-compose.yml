@@ -8,12 +8,15 @@ services:
       - trottinette_net
     volumes:
       - pio-cache:/root/.platformio
-      - ./firmware/include/config.h:/app/firmware/include/config.h:ro
       - builds:/app/builds
-    # Port exposé uniquement pour debug local — commenter en production
-    # ports:
-    #   - "3000:3000"
+      - data:/app/data
+      # Monter config.h si présent (nécessaire uniquement pour la compilation OTA)
+      # Commenter si le fichier n'existe pas encore
+      # - ./firmware/include/config.h:/app/firmware/include/config.h:ro
+    ports:
+      - "${PROXY_PORT:-3000}:3000"
 
+  # Cloudflared est optionnel — démarrer avec : docker compose --profile tunnel up -d
   cloudflared:
     image: cloudflare/cloudflared:latest
     command: tunnel --no-autoupdate run
@@ -24,6 +27,8 @@ services:
       - proxy
     networks:
       - trottinette_net
+    profiles:
+      - tunnel
 
 networks:
   trottinette_net:
@@ -32,3 +37,4 @@ networks:
 volumes:
   pio-cache:
   builds:
+  data:

@@ -11,6 +11,11 @@
 #include "config.h"
 #include "flipsky.h"
 #include "sleep.h"
+#include "music.h"
+#include "display.h"
+#include "connectivity.h"
+// modem.h et lora.h sont inclus par connectivity.h et utilisés via leurs gardes
+#include "lora.h"
 #include <Update.h>
 
 static FlipskyData escData;
@@ -96,6 +101,31 @@ static uint32_t          wifiRetryDelay     = 2000;   // commence à 2 s
 static uint8_t           wifiRetryCount     = 0;
 static volatile bool     wifiLost           = false;
 
+// ── Boutons physiques (écran + verrouillage) ─────────────────────────────────
+static bool     btnLockState      = false;
+static bool     btnLockRaw        = false;
+static uint32_t btnLockChanged    = 0;
+static uint32_t btnLockPressStart = 0;
+
+static bool     btnPageState      = false;
+static bool     btnPageRaw        = false;
+static uint32_t btnPageChanged    = 0;
+
+static uint32_t lastPageChange    = 0;  // Pour retour auto à page 0
+
+// ── Données d'affichage ──────────────────────────────────────────────────────
+static DisplayData dispData;
+static uint32_t    lastDisplayUpdate = 0;
+
+// ── Connectivité watchdog (HORS ZONE) ────────────────────────────────────────
+static bool     outOfRange         = false;
+static uint32_t outOfRangeStart    = 0;
+static uint32_t lastWifiActivity   = 0;
+static bool     alertTonePlayed    = false;
+
+// ── MAC address (cache) ──────────────────────────────────────────────────────
+static uint8_t macAddr[6];
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Connexion WiFi
 // ─────────────────────────────────────────────────────────────────────────────
@@ -171,15 +201,15 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
     switch (type) {
         case WStype_CONNECTED: {
             wsProxyConnected = true;
+            lastWifiActivity = millis();
             wsLog("[ws-proxy] connecté");
             // Envoyer la version firmware + MAC au proxy
             {
-                uint8_t mac[6];
-                WiFi.macAddress(mac);
                 char hello[160];
                 snprintf(hello, sizeof(hello),
                     "{\"type\":\"hello\",\"version\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}",
-                    FW_VERSION, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                    FW_VERSION, macAddr[0], macAddr[1], macAddr[2],
+                    macAddr[3], macAddr[4], macAddr[5]);
                 wsProxy.sendTXT(hello);
             }
             break;
@@ -191,6 +221,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
             break;
 
         case WStype_TEXT: {
+            lastWifiActivity = millis();
             JsonDocument doc;
             if (deserializeJson(doc, payload, length)) break;
             const char *evtype = doc["type"] | "";
@@ -285,6 +316,23 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 } else if (lastAction == "vitesse_haute") {
                     currentGear = FTESC_GEAR_HIGH;
                 }
+            } else if (strcmp(evtype, "music") == 0) {
+                const char* action = doc["action"] | "";
+                if (strcmp(action, "play") == 0) {
+                    int track = doc["track"] | -1;
+                    if (track >= 0) musicPlay((uint8_t)track);
+                    else musicToggle();
+                } else if (strcmp(action, "pause") == 0) {
+                    musicPause();
+                } else if (strcmp(action, "next") == 0) {
+                    musicNext();
+                } else if (strcmp(action, "prev") == 0) {
+                    musicPrev();
+                } else if (strcmp(action, "stop") == 0) {
+                    musicStop();
+                }
+                sleepResetActivity();
+                wsLog("[music] commande: %s", action);
             } else if (strcmp(evtype, "lock") == 0) {
                 bool newLocked = doc["locked"] | true;
                 scooterLocked = newLocked;
@@ -402,21 +450,27 @@ static void taskCapture(void *) {
         }
 
         if (otaMode) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
-        size_t len = audioCaptureChunk(pcmBuf);  // toujours lire l'I2S
-        if (voiceActive && wsProxyConnected && len > 0) {
-            // Accumuler 4 chunks (128 ms) avant d'envoyer une frame WS
-            if (pcmAccumLen + len <= sizeof(pcmAccum)) {
-                memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
-                pcmAccumLen += len;
-            }
-            if (pcmAccumLen >= sizeof(pcmAccum)) {
+
+        // Ne pas capturer l'audio si l'I2S est désactivé (mode veille légère)
+        if (!sleepIsI2SDisabled()) {
+            size_t len = audioCaptureChunk(pcmBuf);  // toujours lire l'I2S
+            if (voiceActive && wsProxyConnected && len > 0) {
+                // Accumuler 4 chunks (128 ms) avant d'envoyer une frame WS
+                if (pcmAccumLen + len <= sizeof(pcmAccum)) {
+                    memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
+                    pcmAccumLen += len;
+                }
+                if (pcmAccumLen >= sizeof(pcmAccum)) {
+                    wsProxy.sendBIN(pcmAccum, pcmAccumLen);
+                    pcmAccumLen = 0;
+                }
+            } else if (!voiceActive && pcmAccumLen > 0) {
+                // Envoyer le reste quand le bouton est relâché
                 wsProxy.sendBIN(pcmAccum, pcmAccumLen);
                 pcmAccumLen = 0;
             }
-        } else if (!voiceActive && pcmAccumLen > 0) {
-            // Envoyer le reste quand le bouton est relâché
-            wsProxy.sendBIN(pcmAccum, pcmAccumLen);
-            pcmAccumLen = 0;
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(50));  // Économiser le CPU en mode veille
         }
 #endif
     }
@@ -491,6 +545,107 @@ static void sendTelemetry() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Remplir les données d'affichage depuis la télémétrie ESC + état connexion
+// ─────────────────────────────────────────────────────────────────────────────
+static void populateDisplayData() {
+#if FAKE_TELEMETRY
+    float t = millis() / 1000.0f;
+    dispData.speed    = 15.0f + 10.0f * sinf(t * 0.3f);
+    dispData.voltage  = 42.0f + 5.0f  * sinf(t * 0.1f);
+    dispData.current  = 8.0f  + 6.0f  * fabsf(sinf(t * 0.4f));
+    dispData.tempFet  = 45.0f + 10.0f * sinf(t * 0.05f);
+    dispData.tempMotor = 40.0f;
+    dispData.rpm      = dispData.speed * ESC_POLE_PAIRS * 1000.0f / 60.0f;
+#else
+    float rpm = fabsf(escData.rpm);
+    dispData.speed     = rpm / (float)ESC_POLE_PAIRS * 60.0f * 0.216f * 3.14159f / 1000.0f;
+    dispData.voltage   = escData.voltage;
+    dispData.current   = escData.motorCurrent;
+    dispData.tempFet   = escData.tempFet;
+    dispData.tempMotor = escData.tempMotor;
+    dispData.rpm       = escData.rpm;
+#endif
+
+    // Pourcentage batterie (linéaire entre min et max)
+    dispData.battPercent = constrain(
+        (dispData.voltage - BATT_VOLTAGE_MIN) / (BATT_VOLTAGE_MAX - BATT_VOLTAGE_MIN) * 100.0f,
+        0.0f, 100.0f);
+
+    // État connexion
+    dispData.wifiConnected = (WiFi.status() == WL_CONNECTED);
+    dispData.wsConnected   = wsProxyConnected;
+    dispData.micActive     = voiceActive;
+    dispData.locked        = scooterLocked;
+
+    // Type de connexion et signal
+    dispData.connType = (uint8_t)connGetType();
+    dispData.rssi     = connGetRSSI();
+
+    // État énergie
+    dispData.powerState = (uint8_t)sleepGetPowerState();
+
+    // LoRa
+    dispData.loraConnected = loraIsActive();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Watchdog connectivité — détection HORS ZONE
+//
+//  Si tous les liens RF sont perdus (WiFi + LTE + LoRa) pendant plus de
+//  WATCHDOG_GRACE_MS, forcer le neutre et afficher l'alerte HORS ZONE.
+// ─────────────────────────────────────────────────────────────────────────────
+static void checkConnectivityWatchdog() {
+    bool wifiOk = (WiFi.status() == WL_CONNECTED) &&
+                  (millis() - lastWifiActivity < WIFI_LINK_TIMEOUT_MS);
+    bool wsOk   = wsProxyConnected;
+    bool loraOk = loraIsActive();
+
+    // LTE : vérifier seulement si activé
+    bool lteOk = false;
+#if LTE_ENABLED
+    lteOk = modemIsConnected();
+#endif
+
+    bool anyLink = wifiOk || wsOk || lteOk || loraOk;
+
+    if (!anyLink) {
+        if (!outOfRange) {
+            // Premier constat de perte totale
+            if (outOfRangeStart == 0) {
+                outOfRangeStart = millis();
+            }
+            // Attendre la période de grâce
+            if (millis() - outOfRangeStart >= WATCHDOG_GRACE_MS) {
+                outOfRange = true;
+                Serial.println("[watchdog] HORS ZONE — tous les liens RF perdus !");
+
+                // Forcer le neutre par sécurité
+                currentThrottle = FTESC_THROTTLE_NEUTRAL;
+                brakeLightOn    = false;
+
+                // Activer l'alerte sur l'écran
+                displayShowOutOfRange(true);
+
+                // Jouer la tonalité d'alerte (une seule fois)
+                if (!alertTonePlayed) {
+                    sleepPlayAlertTone();
+                    alertTonePlayed = true;
+                }
+            }
+        }
+    } else {
+        // Au moins un lien est actif
+        if (outOfRange) {
+            Serial.println("[watchdog] lien RF retrouvé — sortie HORS ZONE");
+            outOfRange = false;
+            displayShowOutOfRange(false);
+            alertTonePlayed = false;
+        }
+        outOfRangeStart = 0;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  setup / loop
 // ─────────────────────────────────────────────────────────────────────────────
 void setup() {
@@ -511,8 +666,17 @@ void setup() {
 
     wsLog("\n=== Trottinette Intelligente — ESP32 ===");
 
-    // Libérer GPIO 21/22 si le BSP les a initialisés comme I2C
-    Wire.end();
+    // ── I2C pour l'écran OLED (SDA=21, SCL=22) ──────────────────────────────
+    // Initialiser Wire au lieu de le désactiver (l'écran OLED en a besoin)
+    Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
+
+    // ── Écran OLED : initialisation et logo de démarrage ─────────────────────
+#if OLED_ENABLED
+    displayInit();
+#endif
+
+    // ── Cacher la MAC pour usage ultérieur (hello, LoRa, etc.) ───────────────
+    WiFi.macAddress(macAddr);
 
     pinMode(VOICE_BTN_PIN, INPUT_PULLUP);
 
@@ -522,6 +686,10 @@ void setup() {
 
     // Bouton PTT (actif LOW)
     pinMode(GEAR_R_PIN, INPUT_PULLUP);
+
+    // ── Boutons physiques : verrouillage et changement de page ───────────────
+    pinMode(BTN_LOCK_PIN, INPUT_PULLUP);
+    pinMode(BTN_PAGE_PIN, INPUT_PULLUP);
 
     // Event WiFi : déconnexion détectée immédiatement, reconnexion déclenchée au prochain loop
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
@@ -533,6 +701,7 @@ void setup() {
             wifiLost       = false;
             wifiRetryDelay = 2000;
             wifiRetryCount = 0;
+            lastWifiActivity = millis();
             wsLog("[wifi] reconnecté : %s\n", WiFi.localIP().toString().c_str());
             // Ré-enregistrer mDNS après reconnexion
             MDNS.end();
@@ -544,6 +713,8 @@ void setup() {
     });
 
     connectWiFi();
+    lastWifiActivity = millis();
+    connSetType(CONN_WIFI);  // Informer le gestionnaire de connectivité
 
     Serial2.begin(ESC_BAUD, SERIAL_8N1, ESC_RX_PIN, ESC_TX_PIN);
     wsLog("[esc] Flipsky UART initialisé");
@@ -553,6 +724,20 @@ void setup() {
 
     audioInitDAC();
     wsLog("[dac] timer OK");
+
+    // ── Initialisation LoRa (si activé) ──────────────────────────────────────
+#if LORA_ENABLED
+    if (loraInit()) {
+        wsLog("[lora] module LoRa initialisé");
+    } else {
+        wsLog("[lora] ERREUR initialisation LoRa");
+    }
+#endif
+
+    // ── Lecteur de musique ──────────────────────────────────────────────────
+#if MUSIC_ENABLED
+    musicInit();
+#endif
 
     // WebSocket serveur (télémétrie)
     wsServer.begin();
@@ -626,6 +811,77 @@ void loop() {
 
     // Vitesse unique : toujours FTESC_GEAR_HIGH (sélection vocale via IA)
 
+    // ── Bouton LOCK : anti-rebond + appui long pour verrouiller/déverrouiller ──
+    {
+        bool now = (digitalRead(BTN_LOCK_PIN) == LOW);
+        if (now != btnLockRaw) { btnLockRaw = now; btnLockChanged = millis(); }
+        if (millis() - btnLockChanged >= BTN_DEBOUNCE_MS) {
+            if (btnLockRaw && !btnLockState) {
+                // Front montant (bouton enfoncé)
+                btnLockState = true;
+                btnLockPressStart = millis();
+                sleepResetActivity();
+            } else if (!btnLockRaw && btnLockState) {
+                // Front descendant (bouton relâché)
+                btnLockState = false;
+                uint32_t pressDuration = millis() - btnLockPressStart;
+                if (pressDuration >= BTN_LONG_PRESS_MS) {
+                    // Appui long : basculer verrouillage
+                    scooterLocked = !scooterLocked;
+                    Serial.printf("[btn] verrouillage basculé → %s\n",
+                                  scooterLocked ? "VERROUILLÉ" : "DÉVERROUILLÉ");
+                    if (scooterLocked) {
+                        currentThrottle = FTESC_THROTTLE_NEUTRAL;
+                        brakeLightOn    = false;
+                    }
+                    // Confirmer au proxy si connecté
+                    if (wsProxyConnected) {
+                        char lockMsg[64];
+                        snprintf(lockMsg, sizeof(lockMsg),
+                            "{\"type\":\"lock_ack\",\"locked\":%s}",
+                            scooterLocked ? "true" : "false");
+                        // On ne peut pas envoyer directement (Core0 vs Core1)
+                        // Utiliser le buffer de télémétrie ou la queue de logs
+                        wsLog("[btn] lock_ack envoyé : locked=%s",
+                              scooterLocked ? "true" : "false");
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Bouton PAGE : anti-rebond + changement de page OLED ──────────────────
+    {
+        bool now = (digitalRead(BTN_PAGE_PIN) == LOW);
+        if (now != btnPageRaw) { btnPageRaw = now; btnPageChanged = millis(); }
+        if (millis() - btnPageChanged >= BTN_DEBOUNCE_MS) {
+            if (btnPageRaw && !btnPageState) {
+                // Front montant : changer de page
+                btnPageState = true;
+                displayNextPage();
+                lastPageChange = millis();
+                sleepResetActivity();
+                Serial.println("[btn] page suivante");
+            } else if (!btnPageRaw && btnPageState) {
+                btnPageState = false;
+            }
+        }
+    }
+
+    // ── Retour automatique à la page 0 après DISPLAY_AUTO_RETURN_MS ─────────
+    // Pas de retour auto si on est sur la page musique et que la musique joue
+    bool onMusicPage = (_displayPage == MUSIC_PAGE);
+    if (lastPageChange > 0 && millis() - lastPageChange >= DISPLAY_AUTO_RETURN_MS) {
+        if (!(onMusicPage && musicIsActive())) {
+            displaySetPage(0);
+            lastPageChange = 0;
+        }
+    }
+
+    // ── Lecteur de musique : tick non-bloquant ───────────────────────────────
+#if MUSIC_ENABLED
+    musicTick(voiceActive);
+#endif
 
     // Reconnexion WiFi : backoff exponentiel 2s → 4s → 8s → … → 30s max, reboot après 20 échecs
     if (wifiLost && millis() >= wifiRetryAt) {
@@ -770,14 +1026,84 @@ void loop() {
         }
         }  // end if (escReady)
 #endif
+        // Utiliser l'intervalle de télémétrie dynamique selon l'état de puissance
         static uint32_t lastTelSend = 0;
-        if (millis() - lastTelSend >= TELEMETRY_MS) {
+        uint32_t telInterval = sleepGetTelemetryInterval();
+        if (millis() - lastTelSend >= telInterval) {
             lastTelSend = millis();
             sendTelemetry();
         }
     }
 
-    // ── Moniteur d'inactivité → deep sleep ───────────────────────────────────
+    // ── Rafraîchissement de l'écran OLED ─────────────────────────────────────
+#if OLED_ENABLED
+    if (millis() - lastDisplayUpdate >= OLED_REFRESH_MS) {
+        lastDisplayUpdate = millis();
+        populateDisplayData();
+        displayUpdate(&dispData);
+    }
+#endif
+
+    // ── Watchdog connectivité (détection HORS ZONE) ──────────────────────────
+    {
+        static uint32_t lastWatchdog = 0;
+        if (millis() - lastWatchdog >= 1000) {
+            lastWatchdog = millis();
+            checkConnectivityWatchdog();
+        }
+    }
+
+    // ── Sécurité HORS ZONE : forcer neutre en continu ───────────────────────
+    if (outOfRange) {
+        currentThrottle = FTESC_THROTTLE_NEUTRAL;
+        brakeLightOn    = false;
+    }
+
+    // ── LoRa : envoi périodique et réception ─────────────────────────────────
+#if LORA_ENABLED
+    {
+        static uint32_t lastLoraSend = 0;
+        if (millis() - lastLoraSend >= LORA_SEND_INTERVAL_MS) {
+            lastLoraSend = millis();
+            loraSendHeartbeat(macAddr);
+        }
+
+        // Vérifier les commandes LoRa entrantes
+        LoraCommand cmd = loraReceive();
+        if (cmd.valid) {
+            switch (cmd.type) {
+                case LORA_MSG_COMMAND:
+                    wsLog("[lora] commande reçue");
+                    sleepResetActivity();
+                    break;
+                case LORA_MSG_EMERGENCY:
+                    Serial.println("[lora] ARRÊT D'URGENCE REÇU !");
+                    currentThrottle = FTESC_THROTTLE_NEUTRAL;
+                    brakeLightOn    = false;
+                    scooterLocked   = true;
+                    break;
+                case LORA_MSG_LOCK: {
+                    bool lockCmd = (cmd.payloadLen > 0) ? (cmd.payload[0] != 0) : true;
+                    scooterLocked = lockCmd;
+                    Serial.printf("[lora] verrouillage → %s\n",
+                                  lockCmd ? "VERROUILLÉ" : "DÉVERROUILLÉ");
+                    if (lockCmd) {
+                        currentThrottle = FTESC_THROTTLE_NEUTRAL;
+                        brakeLightOn    = false;
+                    }
+                    break;
+                }
+                case LORA_MSG_ACK:
+                    // ACK reçu, le timestamp est déjà mis à jour par loraReceive()
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+#endif
+
+    // ── Moniteur d'inactivité → machine à états de puissance ─────────────────
     // Vérifier toutes les secondes si le système est inactif
     {
         static uint32_t lastSleepCheck = 0;

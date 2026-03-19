@@ -4,3 +4,10 @@ firmware/__pycache__
 .git
 .github
 .env
+data/
+tools/qr/
+tools/provision_report.csv
+plans/
+*.md
+!README.md
+.claude/

@@ -5,31 +5,43 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<title>Trottinette Intelligente</title>
+<title>LimoTrott — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root {
-    --bg:       #0d1117;
-    --surface:  #161b22;
-    --border:   #30363d;
-    --text:     #e6edf3;
-    --muted:    #8b949e;
-    --accent:   #58a6ff;
-    --green:    #3fb950;
-    --yellow:   #d29922;
-    --red:      #f85149;
-    --orange:   #e3703a;
-    --radius:   8px;
-    --nav-h:    60px;
-    --header-h: 48px;
+    --bg: #121212;
+    --surface: #1e1e1e;
+    --surface-raised: #2a2a2a;
+    --accent: #00f8ce;
+    --accent-alt: #42f7fb;
+    --speed: #00f8ce;
+    --battery: #bae562;
+    --current: #f6fd54;
+    --temp: #ed1e20;
+    --danger: #ed1e20;
+    --ptt-idle: #00f8ce;
+    --ptt-active: #ed1e20;
+    --text: #f0f0f5;
+    --text-secondary: #dcdcdc;
+    --border: #343030;
+    --green: #bae562;
+    --yellow: #f6fd54;
+    --red: #ed1e20;
+    --muted: #888;
+    --radius: 12px;
+    --nav-h: 60px;
+    --header-h: 52px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-family: 'Inter', system-ui, sans-serif;
     font-size: 14px;
     display: grid;
     grid-template-rows: var(--header-h) 1fr;
@@ -43,92 +55,247 @@
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
-    padding: 0 12px;
+    padding: 0 14px;
     gap: 10px;
     min-width: 0;
+    height: var(--header-h);
   }
-  header h1 {
-    font-size: 14px; font-weight: 700;
-    letter-spacing: 0.06em; color: var(--accent);
-    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  #scooter-select {
+    padding: 5px 8px; font-size: 12px; font-weight: 600;
+    background: var(--surface-raised); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    max-width: 160px; outline: none; cursor: pointer;
   }
-  .indicators { display: flex; gap: 8px; align-items: center; }
+  .header-spacer { flex: 1; }
+  .indicators { display: flex; gap: 6px; align-items: center; }
   .dot {
-    width: 9px; height: 9px; border-radius: 50%;
+    width: 10px; height: 10px; border-radius: 50%;
     background: var(--border);
     transition: background 0.3s;
     flex-shrink: 0;
+    position: relative;
   }
-  .dot.on  { background: var(--green);  box-shadow: 0 0 5px var(--green); }
-  .dot.err { background: var(--red);    box-shadow: 0 0 5px var(--red); }
-  .dot.warn{ background: var(--yellow); box-shadow: 0 0 5px var(--yellow); }
-  .ind-label { font-size: 11px; color: var(--muted); }
+  .dot.on  { background: var(--green);  box-shadow: 0 0 6px var(--green); }
+  .dot.err { background: var(--red);    box-shadow: 0 0 6px var(--red); }
+  .dot.warn{ background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+  .ind-label { font-size: 11px; color: var(--muted); font-weight: 600; }
   .mode-badge {
-    background: var(--border); border-radius: 4px;
-    padding: 2px 7px; font-size: 11px; font-weight: 700;
+    background: var(--surface-raised); border-radius: 6px;
+    padding: 3px 8px; font-size: 11px; font-weight: 700;
     letter-spacing: 0.08em; color: var(--accent); flex-shrink: 0;
   }
   .hdr-btn {
     background: none; border: 1px solid var(--border); color: var(--muted);
-    border-radius: 4px; padding: 3px 9px; cursor: pointer; font-size: 11px;
-    transition: all 0.2s; flex-shrink: 0;
+    border-radius: 8px; padding: 5px 10px; cursor: pointer; font-size: 12px;
+    transition: all 0.2s; flex-shrink: 0; display: flex; align-items: center;
+    justify-content: center; gap: 4px;
   }
+  .hdr-btn:hover { border-color: var(--accent); color: var(--accent); }
   .hdr-btn.active { border-color: var(--yellow); color: var(--yellow); }
+  .hdr-btn svg { width: 16px; height: 16px; }
 
   /* ── Desktop layout ── */
-  .main {
+  .desktop-layout {
     display: grid;
-    grid-template-columns: 1fr 320px;
-    gap: 1px;
-    background: var(--border);
+    grid-template-columns: 380px 1fr;
     overflow: hidden;
+    height: 100%;
   }
-  .panel {
+  .left-col {
     background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    padding: 20px;
+    gap: 20px;
+    align-items: center;
+  }
+  .right-col-new {
     display: flex;
     flex-direction: column;
     overflow: hidden;
   }
-  .right-col {
-    display: flex; flex-direction: column;
-    gap: 1px; overflow: hidden;
-    background: var(--border);
+  .map-area {
+    flex: 6; min-height: 0; position: relative;
   }
-  .controls-row { display: flex; gap: 1px; flex: 0 0 auto; }
-  .controls-row .panel { flex: 1; }
-  .panel-title {
-    font-size: 11px; font-weight: 700;
-    letter-spacing: 0.1em; text-transform: uppercase;
+  .map-area #map-desktop { width: 100%; height: 100%; }
+  .log-area {
+    flex: 4; min-height: 0;
+    border-top: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    background: var(--surface);
+  }
+  .log-area .panel-title {
+    font-size: 13px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); padding: 10px 16px;
+    border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+
+  /* ── Speedometer ── */
+  .speedometer-wrap {
+    position: relative;
+    width: 200px; height: 200px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .speedometer {
+    width: 200px; height: 200px;
+    border-radius: 50%;
+    background: conic-gradient(
+      var(--speed) 0deg calc(var(--speed-pct, 0) * 2.7deg),
+      var(--border) calc(var(--speed-pct, 0) * 2.7deg) 270deg,
+      transparent 270deg
+    );
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .speedometer-inner {
+    width: 164px; height: 164px;
+    border-radius: 50%;
+    background: var(--surface);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    position: relative;
+    z-index: 1;
+  }
+  .speed-value {
+    font-size: 64px; font-weight: 800;
+    line-height: 1; color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .speed-unit {
+    font-size: 18px; font-weight: 600;
+    color: var(--muted); margin-top: 2px;
+  }
+  .ride-timer-display {
+    font-size: 14px; font-weight: 700;
+    color: var(--green); margin-top: 4px;
+    display: none;
+  }
+  .speedometer-wrap.riding .speedometer {
+    box-shadow: 0 0 0 3px var(--green), 0 0 20px rgba(186,229,98,0.3);
+    animation: riding-pulse 2s ease-in-out infinite;
+  }
+  @keyframes riding-pulse {
+    0%,100% { box-shadow: 0 0 0 3px var(--green), 0 0 20px rgba(186,229,98,0.2); }
+    50%     { box-shadow: 0 0 0 3px var(--green), 0 0 30px rgba(186,229,98,0.5); }
+  }
+  .lock-overlay {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: rgba(18,18,18,0.65);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 2;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  .lock-overlay.visible { opacity: 1; }
+  .lock-overlay svg { width: 56px; height: 56px; fill: var(--red); opacity: 0.8; }
+
+  /* ── Telemetry pills ── */
+  .telemetry-strip {
+    display: flex; gap: 10px; justify-content: center;
+    flex-wrap: wrap;
+  }
+  .pill {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 8px 14px;
+    display: flex; align-items: baseline; gap: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .pill::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at center, var(--pill-color, var(--accent)) 0%, transparent 70%);
+    opacity: 0.06;
+  }
+  .pill-value {
+    font-size: 24px; font-weight: 700;
+    color: var(--pill-color, var(--text));
+    font-variant-numeric: tabular-nums;
+    position: relative;
+  }
+  .pill-unit {
+    font-size: 13px; font-weight: 600;
     color: var(--muted);
-    padding: 7px 12px;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    position: relative;
   }
-  .panel-body { flex: 1; overflow: hidden; padding: 12px; }
-
-  /* ── Carte ── */
-  #map { width: 100%; height: 100%; border-radius: var(--radius); }
-  .map-panel .panel-body { padding: 8px; }
-
-  /* ── Jauges ── */
-  .gauges-grid {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 10px; height: 100%;
+  .pill-label {
+    font-size: 11px; font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    position: relative;
+    margin-left: 2px;
   }
-  .gauge-item {
+
+  /* ── PTT Button ── */
+  .ptt-wrap {
     display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 4px;
+    align-items: center; gap: 10px;
   }
-  .gauge-label { font-size: 11px; color: var(--muted); letter-spacing: 0.05em; }
-  .gauge-value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .gauge-unit  { font-size: 11px; color: var(--muted); }
-  .gauge-arc-wrap { position: relative; width: 80px; height: 48px; overflow: hidden; }
-  .gauge-arc-wrap svg { position: absolute; top: 0; left: 0; }
+  .ptt-container {
+    position: relative;
+    width: 80px; height: 80px;
+  }
+  .ptt-ripple {
+    position: absolute; inset: -10px;
+    border-radius: 50%;
+    border: 2px solid var(--ptt-active);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .ptt-btn-new {
+    width: 80px; height: 80px; border-radius: 50%;
+    border: 2.5px solid var(--ptt-idle);
+    background: transparent;
+    color: var(--ptt-idle);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: all 0.2s;
+    position: relative; z-index: 1;
+  }
+  .ptt-btn-new svg { width: 32px; height: 32px; fill: currentColor; }
+  .ptt-btn-new.active {
+    border-color: var(--ptt-active);
+    color: var(--ptt-active);
+    background: rgba(237,30,32,0.1);
+  }
+  .ptt-btn-new.active ~ .ptt-ripple {
+    animation: ripple-expand 1.5s ease-out infinite;
+  }
+  .ptt-btn-new.active ~ .ptt-ripple:nth-child(3) {
+    animation-delay: 0.5s;
+  }
+  .ptt-btn-new.active ~ .ptt-ripple:nth-child(4) {
+    animation-delay: 1s;
+  }
+  @keyframes ripple-expand {
+    0%   { transform: scale(0.8); opacity: 0.6; }
+    100% { transform: scale(1.8); opacity: 0; }
+  }
+  .ptt-status {
+    font-size: 13px; color: var(--muted);
+    letter-spacing: 0.04em; text-align: center;
+  }
 
-  /* ── Contrôle manuel ── */
-  .ctrl-panel .panel-body {
-    display: flex; flex-direction: column;
-    gap: 10px; justify-content: center;
+  /* ── Manual controls ── */
+  .manual-controls {
+    width: 100%;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .controls-title {
+    font-size: 13px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted);
   }
   .btn-row { display: flex; gap: 8px; }
   .btn {
@@ -137,6 +304,7 @@
     background: transparent; color: var(--text);
     border-radius: var(--radius); cursor: pointer;
     font-size: 13px; font-weight: 700;
+    font-family: 'Inter', system-ui, sans-serif;
     transition: all 0.15s;
     -webkit-tap-highlight-color: transparent;
   }
@@ -144,64 +312,43 @@
   .btn.forward { border-color: var(--green);  color: var(--green); }
   .btn.brake   { border-color: var(--yellow); color: var(--yellow); }
   .btn.stop    { border-color: var(--red);    color: var(--red); }
-  .btn.forward:active { background: rgba(63,185,80,0.15); }
-  .btn.brake:active   { background: rgba(210,153,34,0.15); }
-  .btn.stop:active    { background: rgba(248,81,73,0.15); }
+  .btn.forward:active { background: rgba(186,229,98,0.12); }
+  .btn.brake:active   { background: rgba(246,253,84,0.12); }
+  .btn.stop:active    { background: rgba(237,30,32,0.12); }
   .slider-row { display: flex; align-items: center; gap: 8px; }
-  .slider-row label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .slider-row label { font-size: 12px; color: var(--muted); white-space: nowrap; font-weight: 600; }
   #intensity-slider { flex: 1; accent-color: var(--accent); }
   #intensity-val { font-size: 13px; font-weight: 700; width: 36px; text-align: right; }
+  .monitor-btn {
+    padding: 6px 12px; font-size: 12px; font-weight: 600;
+    background: var(--surface-raised); border: 1px solid var(--border);
+    color: var(--muted); cursor: pointer; border-radius: var(--radius);
+    font-family: 'Inter', system-ui, sans-serif;
+    display: flex; align-items: center; gap: 6px;
+    transition: all 0.2s;
+  }
 
-  /* ── Commande vocale ── */
-  .voice-panel .panel-body {
-    display: flex; flex-direction: column;
-    gap: 8px; align-items: center; justify-content: center;
+  /* ── Voice log ── */
+  .voice-log {
+    flex: 1; overflow-y: auto;
+    padding: 10px 16px;
+    display: flex; flex-direction: column; gap: 6px;
   }
-  #ptt-btn {
-    width: 70px; height: 70px; border-radius: 50%;
-    border: 2px solid var(--accent);
-    background: transparent; color: var(--accent);
-    font-size: 26px; cursor: pointer;
-    transition: all 0.15s;
-    display: flex; align-items: center; justify-content: center;
-    user-select: none; -webkit-user-select: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-  #ptt-btn.active {
-    border-color: var(--red); color: var(--red);
-    background: rgba(248,81,73,0.12);
-    box-shadow: 0 0 20px rgba(248,81,73,0.35);
-    animation: pulse 1s infinite;
-  }
-  @keyframes pulse {
-    0%,100%{ box-shadow: 0 0 16px rgba(248,81,73,0.3); }
-    50%    { box-shadow: 0 0 28px rgba(248,81,73,0.65); }
-  }
-  #voice-status { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; text-align: center; }
-
-  /* ── Journal ── */
-  .log-panel { flex: 1; min-height: 0; }
-  .log-panel .panel-body { padding: 0; }
-  #voice-log {
-    height: 100%; overflow-y: auto;
-    padding: 8px 12px;
-    display: flex; flex-direction: column; gap: 5px;
-  }
-  #voice-log::-webkit-scrollbar { width: 4px; }
-  #voice-log::-webkit-scrollbar-track { background: transparent; }
-  #voice-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .voice-log::-webkit-scrollbar { width: 4px; }
+  .voice-log::-webkit-scrollbar-track { background: transparent; }
+  .voice-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
   .log-entry {
-    padding: 5px 8px; border-radius: 4px;
-    font-size: 12px; line-height: 1.4;
-    border-left: 2px solid transparent;
+    padding: 6px 10px; border-radius: 6px;
+    font-size: 14px; line-height: 1.5;
+    border-left: 3px solid transparent;
   }
   .log-entry.transcript { border-color: var(--muted); color: var(--muted); }
   .log-entry.ai         { border-color: var(--accent); color: var(--text); }
-  .log-entry.cmd        { border-color: var(--green); background: rgba(63,185,80,0.08); color: var(--green); font-weight: 700; }
+  .log-entry.cmd        { border-color: var(--green); background: rgba(186,229,98,0.06); color: var(--green); font-weight: 700; }
   .log-entry.system     { border-color: var(--border); color: var(--muted); font-style: italic; }
   .log-entry.sys        { border-color: var(--accent); color: var(--accent); }
   .log-entry.warn       { border-color: var(--yellow); color: var(--yellow); font-weight: 700; }
-  .log-time { font-size: 10px; color: var(--muted); margin-right: 5px; opacity: 0.7; }
+  .log-time { font-size: 11px; color: var(--muted); margin-right: 6px; opacity: 0.6; }
 
   /* ── Login ── */
   #login-overlay {
@@ -214,28 +361,36 @@
   #login-overlay.hidden { opacity: 0; pointer-events: none; }
   .login-card {
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; padding: 36px 32px;
-    width: 100%; max-width: 340px;
-    display: flex; flex-direction: column; gap: 20px;
+    border-radius: 16px; padding: 40px 32px;
+    width: 100%; max-width: 360px;
+    display: flex; flex-direction: column; gap: 24px;
   }
-  .login-card h2 {
-    font-size: 13px; font-weight: 700;
-    letter-spacing: 0.12em; color: var(--accent); text-align: center;
+  .login-card .login-title {
+    font-size: 22px; font-weight: 800;
+    color: var(--accent); text-align: center;
+    letter-spacing: -0.02em;
+  }
+  .login-card .login-subtitle {
+    font-size: 13px; font-weight: 600;
+    color: var(--muted); text-align: center;
+    margin-top: -16px;
+    letter-spacing: 0.06em; text-transform: uppercase;
   }
   .login-fields { display: flex; flex-direction: column; gap: 12px; }
   .login-fields input {
     background: var(--bg); border: 1px solid var(--border);
     border-radius: var(--radius); color: var(--text);
-    font-size: 16px; /* évite le zoom iOS sur focus */
-    padding: 12px 14px; outline: none;
+    font-size: 16px; font-family: 'Inter', system-ui, sans-serif;
+    padding: 13px 16px; outline: none;
     transition: border-color 0.2s; width: 100%;
   }
   .login-fields input:focus { border-color: var(--accent); }
   .login-fields input.error  { border-color: var(--red); }
   #login-submit {
     background: var(--accent); border: none; border-radius: var(--radius);
-    color: #0d1117; font-size: 14px; font-weight: 700;
-    letter-spacing: 0.08em; padding: 13px;
+    color: #121212; font-size: 14px; font-weight: 700;
+    font-family: 'Inter', system-ui, sans-serif;
+    letter-spacing: 0.06em; padding: 14px;
     cursor: pointer; transition: opacity 0.2s;
   }
   #login-submit:active  { opacity: 0.8; }
@@ -250,151 +405,237 @@
   }
   .login-card.shake { animation: shake 0.35s ease; }
 
-  /* ── Bottom nav (mobile uniquement) ── */
-  .bottom-nav {
+  /* ── Bottom sheet pills (mobile) ── */
+  .sheet-pills {
     display: none;
-    position: fixed; bottom: 0; left: 0; right: 0;
-    height: var(--nav-h);
-    background: var(--surface);
-    border-top: 1px solid var(--border);
-    z-index: 100;
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 200;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    padding: 4px;
+    gap: 2px;
   }
-  .bottom-nav-inner {
-    display: flex; height: 100%;
-  }
-  .nav-tab {
-    flex: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 3px;
-    background: none; border: none; cursor: pointer;
-    color: var(--muted); font-size: 9px; font-weight: 700;
-    letter-spacing: 0.06em; text-transform: uppercase;
-    transition: color 0.15s;
+  .sheet-pill {
+    background: none; border: none;
+    color: var(--muted);
+    font-size: 12px; font-weight: 700;
+    font-family: 'Inter', system-ui, sans-serif;
+    letter-spacing: 0.04em;
+    padding: 8px 16px;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.2s;
     -webkit-tap-highlight-color: transparent;
-    padding: 0;
   }
-  .nav-tab .nav-icon { font-size: 20px; line-height: 1; }
-  .nav-tab.active { color: var(--accent); }
-  .nav-tab.active .nav-icon { filter: drop-shadow(0 0 4px var(--accent)); }
+  .sheet-pill.active {
+    background: var(--accent);
+    color: #121212;
+  }
 
-  /* ── Scrollbar global ── */
+  /* ── Bottom sheet ── */
+  .bottom-sheet-overlay {
+    position: fixed; inset: 0; z-index: 150;
+    background: rgba(0,0,0,0.5);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  .bottom-sheet-overlay.visible { opacity: 1; pointer-events: auto; }
+  .bottom-sheet {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    z-index: 160;
+    background: var(--surface);
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
+    max-height: 70vh;
+    transform: translateY(100%);
+    transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .bottom-sheet.open { transform: translateY(0); }
+  .sheet-handle {
+    width: 36px; height: 4px;
+    background: var(--border); border-radius: 2px;
+    margin: 10px auto 6px;
+    flex-shrink: 0;
+  }
+  .sheet-title {
+    font-size: 14px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); padding: 6px 20px 12px;
+    flex-shrink: 0;
+  }
+  .sheet-body {
+    flex: 1; overflow-y: auto; padding: 0 20px 24px;
+  }
+
+  /* ── Carte ── */
+  .leaflet-container { background: #1a1a1a !important; }
+
+  /* ── Scrollbar ── */
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-  /* ── Leaflet override ── */
-  .leaflet-container { background: #1a1f27 !important; }
-  .leaflet-tile { filter: invert(1) hue-rotate(180deg) brightness(0.9); }
+  /* ── Debug modal ── */
+  .debug-modal {
+    display: none; position: fixed; inset: 0; z-index: 9999;
+    background: rgba(0,0,0,0.7);
+    align-items: center; justify-content: center;
+  }
+  .debug-modal.open { display: flex; }
+  .debug-inner {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; width: 92%; max-width: 720px; height: 72vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .debug-header {
+    display: flex; align-items: center; padding: 14px 18px;
+    border-bottom: 1px solid var(--border); gap: 8px;
+  }
+  .debug-header span { font-weight: 700; flex: 1; }
+  .debug-header button {
+    background: none; border: 1px solid var(--border);
+    color: var(--muted); font-size: 12px; cursor: pointer;
+    border-radius: 6px; padding: 4px 10px; font-family: 'Inter', system-ui, sans-serif;
+    transition: all 0.2s;
+  }
+  .debug-header .close-btn { border: none; font-size: 22px; color: var(--text); }
+  #debug-log {
+    flex: 1; min-height: 0; overflow-y: auto;
+    padding: 10px 14px; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px;
+  }
+  .debug-ota {
+    padding: 14px 18px; border-top: 1px solid var(--border);
+  }
+  .debug-ota .section-label {
+    font-weight: 700; font-size: 13px; margin-bottom: 10px;
+  }
+  .ota-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px;
+  }
+  .ota-row select {
+    flex: 1; padding: 5px 8px; font-size: 12px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  .ota-btn {
+    padding: 6px 14px; font-size: 12px; font-weight: 600;
+    background: var(--surface-raised); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; border-radius: var(--radius);
+    font-family: 'Inter', system-ui, sans-serif;
+    transition: all 0.2s;
+  }
+  .ota-btn:hover { border-color: var(--accent); }
+  .ota-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .ota-btn.primary { border-color: var(--green); color: var(--green); }
+  .ota-progress {
+    width: 100%; height: 4px; background: var(--border);
+    border-radius: 2px; margin-top: 6px;
+  }
+  .ota-progress-bar {
+    height: 100%; background: var(--green);
+    border-radius: 2px; width: 0; transition: width 0.3s;
+  }
 
-  /* ════════════════════════════════════════
+  /* ── Settings dropdown ── */
+  .settings-dropdown {
+    position: absolute; top: var(--header-h); right: 10px;
+    background: var(--surface-raised); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 6px;
+    z-index: 300; min-width: 140px;
+    display: none; flex-direction: column; gap: 2px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+  .settings-dropdown.open { display: flex; }
+  .settings-item {
+    background: none; border: none;
+    color: var(--text); font-size: 13px; font-weight: 600;
+    font-family: 'Inter', system-ui, sans-serif;
+    padding: 8px 12px; border-radius: 8px;
+    cursor: pointer; text-align: left;
+    transition: background 0.15s;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .settings-item:hover { background: rgba(255,255,255,0.06); }
+  .settings-item .si-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--border); flex-shrink: 0;
+  }
+  .settings-item.active .si-dot { background: var(--accent); }
+
+  /* ══════════════════════════════════════
      MOBILE  (<= 767 px)
-  ════════════════════════════════════════ */
+  ══════════════════════════════════════ */
   @media (max-width: 767px) {
-
-    body {
-      grid-template-rows: var(--header-h) 1fr;
-    }
-
-    /* Masquer les labels de dot sur mobile */
+    body { font-size: 15px; }
     .ind-label { display: none; }
-    .mode-badge { font-size: 10px; padding: 2px 5px; }
-    .hdr-btn { padding: 3px 7px; font-size: 10px; }
-    header h1 { font-size: 12px; }
+    .mode-badge { font-size: 10px; padding: 2px 6px; }
+    header { padding: 0 10px; gap: 6px; }
 
-    /* La zone principale devient un conteneur de "pages" empilées */
-    .main {
-      display: block;
-      position: relative;
-      overflow: hidden;
-      background: var(--bg);
-    }
+    .desktop-layout { display: none; }
+    .mobile-layout { display: flex !important; }
+    .sheet-pills { display: flex; }
 
-    /* Chaque onglet = une page plein écran */
-    .tab-section {
-      position: absolute; inset: 0;
-      bottom: 0; /* pas de nav-h ici car la nav est fixed */
-      display: none;
+    .mobile-layout {
       flex-direction: column;
-      background: var(--surface);
-      overflow: hidden;
-    }
-    .tab-section.active { display: flex; }
-
-    /* Carte */
-    #tab-map { padding: 0; }
-    #tab-map #map { border-radius: 0; height: 100%; width: 100%; }
-
-    /* Télémétrie : grille 2x2 centrée */
-    #tab-telemetry {
-      align-items: center; justify-content: center;
-      padding: 20px 16px;
-    }
-    #tab-telemetry .gauges-grid {
-      display: grid; grid-template-columns: 1fr 1fr;
-      gap: 20px; width: 100%;
-    }
-    #tab-telemetry .gauge-item { gap: 6px; }
-    #tab-telemetry .gauge-arc-wrap { width: 100px; height: 60px; }
-    #tab-telemetry .gauge-arc-wrap svg { width: 100px; height: 60px; }
-    #tab-telemetry .gauge-value { font-size: 28px; }
-    #tab-telemetry .gauge-unit  { font-size: 13px; }
-    #tab-telemetry .gauge-label { font-size: 12px; }
-
-    /* Contrôle : PTT grand + boutons + slider */
-    #tab-control {
-      padding: 24px 20px;
-      gap: 20px; justify-content: center;
       overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 70px;
     }
-    #tab-control #ptt-btn {
-      width: 110px; height: 110px;
-      font-size: 44px;
-      border-width: 3px;
-      align-self: center;
-    }
-    #tab-control #voice-status {
-      font-size: 13px; text-align: center; align-self: center;
-    }
-    #tab-control .divider {
-      border: none; border-top: 1px solid var(--border);
-      margin: 0;
-    }
-    #tab-control .btn-row { gap: 10px; }
-    #tab-control .btn {
-      padding: 16px 4px; font-size: 14px;
-    }
-    #tab-control .slider-row { gap: 10px; }
-    #tab-control #intensity-val { font-size: 14px; }
 
-    /* Journal */
-    #tab-log {
-      flex-direction: column; overflow: hidden;
+    .mobile-speed-section {
+      display: flex; flex-direction: column;
+      align-items: center; padding: 24px 16px 16px;
+      gap: 16px;
     }
-    #tab-log #voice-log {
-      flex: 1; overflow-y: auto; padding: 12px 14px;
-      font-size: 13px;
+    .speedometer-wrap { width: 220px; height: 220px; }
+    .speedometer { width: 220px; height: 220px; }
+    .speedometer-inner { width: 182px; height: 182px; }
+    .speed-value { font-size: 72px; }
+    .speed-unit { font-size: 18px; }
+    .pill-value { font-size: 28px; }
+
+    .mobile-map {
+      width: 100%; height: 30vh; min-height: 180px;
+      position: relative;
     }
-    #tab-log .log-entry { padding: 7px 10px; font-size: 13px; }
+    .mobile-map #map { width: 100%; height: 100%; }
 
-    /* Cacher le desktop layout */
-    .right-col, .controls-row { display: none; }
-    .panel.map-panel { display: none; }
-
-    /* Afficher la nav */
-    .bottom-nav { display: block; }
-
-    /* Le contenu doit laisser la place à la nav */
-    .main {
-      margin-bottom: var(--nav-h);
+    .mobile-ptt-section {
+      display: flex; flex-direction: column;
+      align-items: center; padding: 20px 16px;
+      gap: 12px;
     }
+    .mobile-ptt-section .ptt-container {
+      width: 100px; height: 100px;
+    }
+    .mobile-ptt-section .ptt-btn-new {
+      width: 100px; height: 100px;
+    }
+    .mobile-ptt-section .ptt-btn-new svg {
+      width: 40px; height: 40px;
+    }
+  }
+
+  @media (min-width: 768px) {
+    .mobile-layout { display: none !important; }
+    .sheet-pills { display: none !important; }
+    .bottom-sheet-overlay { display: none !important; }
+    .bottom-sheet { display: none !important; }
   }
 </style>
 </head>
 <body>
 
-<!-- ── Écran de login ── -->
+<!-- Login overlay -->
 <div id="login-overlay">
   <div class="login-card" id="login-card">
-    <h2>TROTTINETTE INTELLIGENTE</h2>
+    <div class="login-title">LimoTrott</div>
+    <div class="login-subtitle">Dashboard de controle</div>
     <div class="login-fields">
       <input id="login-user" type="text" placeholder="Identifiant" autocomplete="username">
       <input id="login-pass" type="password" placeholder="Mot de passe" autocomplete="current-password">
@@ -404,296 +645,270 @@
   </div>
 </div>
 
-<!-- ── Header ── -->
+<!-- Header -->
 <header>
-  <h1>TROTTINETTE INTELLIGENTE</h1>
-  <select id="scooter-select" onchange="selectScooter(this.value)" title="Trottinette active"
-    style="padding:3px 6px;font-size:11px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);max-width:140px">
+  <select id="scooter-select" onchange="selectScooter(this.value)" title="Trottinette active">
     <option value="">Aucune</option>
   </select>
   <span id="scooter-count" style="font-size:10px;color:var(--muted)">0</span>
-  <button class="hdr-btn" id="lock-btn" onclick="toggleLock()" title="Verrouiller/Déverrouiller"
-    style="font-size:14px;padding:3px 8px;border-color:var(--red);color:var(--red)">🔒</button>
-  <button class="hdr-btn" id="ride-btn" onclick="toggleRide()" title="Démarrer/Terminer une course"
-    style="display:none;font-size:11px;padding:3px 8px">COURSE</button>
-  <span id="ride-timer" style="font-size:10px;color:var(--green);display:none"></span>
+  <div class="header-spacer"></div>
   <div class="indicators">
-    <span class="dot" id="dot-sse"  title="Proxy SSE"></span>
+    <span class="dot" id="dot-sse" title="Proxy SSE"></span>
     <span class="ind-label">Proxy</span>
-    <span class="dot" id="dot-ws"   title="WebSocket trottinette"></span>
+    <span class="dot" id="dot-ws" title="Scooter"></span>
     <span class="ind-label">Scooter</span>
-    <span class="dot" id="dot-ai"   title="IA"></span>
+    <span class="dot" id="dot-ai" title="IA"></span>
     <span class="ind-label">IA</span>
   </div>
+  <button class="hdr-btn" id="lock-btn" onclick="toggleLock()" title="Verrouiller/Deverrouiller">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </svg>
+  </button>
+  <button class="hdr-btn" id="ride-btn" onclick="toggleRide()" title="Demarrer/Terminer une course" style="display:none;font-size:11px">COURSE</button>
+  <span id="ride-timer" style="font-size:11px;color:var(--green);display:none;font-weight:700"></span>
   <span class="mode-badge" id="mode-badge">CLOUD</span>
-  <button class="hdr-btn" id="sim-btn" onclick="toggleSim()">SIM</button>
-  <button class="hdr-btn" id="mute-btn" onclick="toggleMute()" title="Couper/activer le son de l'assistant">🔊</button>
-  <button class="hdr-btn" id="debug-btn" onclick="toggleDebug()" title="Mode debug ESP32">DBG</button>
-  <button class="hdr-btn" onclick="logout()" title="Déconnexion">⏻</button>
-  <span id="fw-version" style="font-size:10px;color:var(--muted);margin-left:4px"></span>
+  <button class="hdr-btn" id="settings-btn" onclick="toggleSettings()" title="Parametres">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  </button>
+  <button class="hdr-btn" onclick="logout()" title="Deconnexion">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+    </svg>
+  </button>
+  <span id="fw-version" style="font-size:10px;color:var(--muted);margin-left:2px"></span>
 </header>
 
-<!-- ══════════════════════════════════════════
-     DESKTOP layout (caché sur mobile par CSS)
-════════════════════════════════════════════ -->
-<div class="main" id="main-desktop">
+<!-- Settings dropdown -->
+<div class="settings-dropdown" id="settings-dropdown">
+  <button class="settings-item" id="sim-item" onclick="toggleSim()">
+    <span class="si-dot"></span> Simulation
+  </button>
+  <button class="settings-item" id="mute-item" onclick="toggleMute()">
+    <span class="si-dot"></span> Couper le son
+  </button>
+  <button class="settings-item" id="debug-item" onclick="toggleDebug()">
+    <span class="si-dot"></span> Debug ESP32
+  </button>
+  <button class="settings-item" id="monitor-item" onclick="toggleMonitor()">
+    <span class="si-dot"></span> Monitor micro
+  </button>
+</div>
 
-  <!-- Carte -->
-  <div class="panel map-panel">
-    <div class="panel-title">Carte en direct</div>
-    <div class="panel-body"><div id="map-desktop"></div></div>
+<!-- ═══════════════════════════════════════
+     DESKTOP LAYOUT
+═══════════════════════════════════════ -->
+<div class="desktop-layout" id="desktop-layout">
+  <!-- Left column -->
+  <div class="left-col">
+    <!-- Speedometer -->
+    <div class="speedometer-wrap" id="speedo-wrap-desktop">
+      <div class="speedometer" id="speedo-desktop">
+        <div class="speedometer-inner">
+          <div class="speed-value" id="val-speed">0</div>
+          <div class="speed-unit">km/h</div>
+          <div class="ride-timer-display" id="ride-timer-speedo"></div>
+        </div>
+      </div>
+      <div class="lock-overlay" id="lock-overlay-desktop">
+        <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="currentColor"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+      </div>
+    </div>
+
+    <!-- Telemetry pills -->
+    <div class="telemetry-strip">
+      <div class="pill" style="--pill-color: var(--battery)">
+        <span class="pill-value" id="val-voltage">0.0</span><span class="pill-unit">V</span>
+      </div>
+      <div class="pill" style="--pill-color: var(--current)">
+        <span class="pill-value" id="val-current">0.0</span><span class="pill-unit">A</span>
+      </div>
+      <div class="pill" style="--pill-color: var(--temp)">
+        <span class="pill-value" id="val-temp">0</span><span class="pill-unit">&deg;C</span>
+      </div>
+    </div>
+
+    <!-- PTT -->
+    <div class="ptt-wrap">
+      <div class="ptt-container">
+        <button class="ptt-btn-new" id="ptt-btn-desktop" title="Activer/desactiver le micro">
+          <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+        <div class="ptt-ripple"></div>
+        <div class="ptt-ripple"></div>
+        <div class="ptt-ripple"></div>
+      </div>
+      <div class="ptt-status" id="voice-status-desktop">Cliquer pour parler</div>
+    </div>
+
+    <!-- Manual controls -->
+    <div class="manual-controls">
+      <div class="controls-title">Controle manuel</div>
+      <div class="btn-row">
+        <button class="btn forward" onclick="sendCmd('avancer')">AVANCER</button>
+        <button class="btn brake"   onclick="sendCmd('freiner')">FREINER</button>
+        <button class="btn stop"    onclick="sendCmd('arreter')">ARRET</button>
+      </div>
+      <div class="slider-row">
+        <label>INTENSITE</label>
+        <input type="range" id="intensity-slider" min="0" max="100" value="50"
+               oninput="document.getElementById('intensity-val').textContent=this.value+'%'">
+        <span id="intensity-val">50%</span>
+      </div>
+    </div>
   </div>
 
-  <!-- Colonne droite -->
-  <div class="right-col">
-
-    <!-- Jauges -->
-    <div class="panel">
-      <div class="panel-title">Télémétrie</div>
-      <div class="panel-body">
-        <div class="gauges-grid">
-          <div class="gauge-item">
-            <div class="gauge-arc-wrap">
-              <svg width="80" height="48" viewBox="0 0 80 48">
-                <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
-                <path id="arc-speed" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#58a6ff" stroke-width="6"
-                      stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
-              </svg>
-            </div>
-            <div class="gauge-value" id="val-speed">0</div>
-            <div class="gauge-unit">km/h</div>
-            <div class="gauge-label">VITESSE</div>
-          </div>
-          <div class="gauge-item">
-            <div class="gauge-arc-wrap">
-              <svg width="80" height="48" viewBox="0 0 80 48">
-                <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
-                <path id="arc-voltage" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#3fb950" stroke-width="6"
-                      stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
-              </svg>
-            </div>
-            <div class="gauge-value" id="val-voltage">0.0</div>
-            <div class="gauge-unit">V</div>
-            <div class="gauge-label">BATTERIE</div>
-          </div>
-          <div class="gauge-item">
-            <div class="gauge-arc-wrap">
-              <svg width="80" height="48" viewBox="0 0 80 48">
-                <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
-                <path id="arc-current" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#e3703a" stroke-width="6"
-                      stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
-              </svg>
-            </div>
-            <div class="gauge-value" id="val-current">0.0</div>
-            <div class="gauge-unit">A</div>
-            <div class="gauge-label">COURANT</div>
-          </div>
-          <div class="gauge-item">
-            <div class="gauge-arc-wrap">
-              <svg width="80" height="48" viewBox="0 0 80 48">
-                <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
-                <path id="arc-temp" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#d29922" stroke-width="6"
-                      stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
-              </svg>
-            </div>
-            <div class="gauge-value" id="val-temp">0</div>
-            <div class="gauge-unit">°C</div>
-            <div class="gauge-label">TEMP MOTEUR</div>
-          </div>
-        </div>
-      </div>
+  <!-- Right column -->
+  <div class="right-col-new">
+    <div class="map-area">
+      <div id="map-desktop"></div>
     </div>
-
-    <!-- Vocal + Manuel côte à côte -->
-    <div class="controls-row">
-      <div class="panel voice-panel">
-        <div class="panel-title">Commande vocale</div>
-        <div class="panel-body">
-          <button id="ptt-btn-desktop" class="ptt-btn-inner" title="Activer/désactiver le micro">🎤</button>
-          <button id="monitor-btn-desktop" class="ptt-btn-inner" style="font-size:0.7em;padding:4px 8px;background:var(--surface);border:1px solid var(--border);color:var(--muted);cursor:pointer;border-radius:var(--radius);margin-top:6px" title="Écouter le micro ESP32 en direct" onclick="toggleMonitor()">🔊 Monitor</button>
-          <div id="voice-status-desktop" class="voice-status-inner">INACTIF — cliquer pour parler</div>
-        </div>
-      </div>
-      <div class="panel ctrl-panel">
-        <div class="panel-title">Contrôle manuel</div>
-        <div class="panel-body">
-          <div class="btn-row">
-            <button class="btn forward" onclick="sendCmd('avancer')">▲ AVANCER</button>
-            <button class="btn brake"   onclick="sendCmd('freiner')">◼ FREINER</button>
-            <button class="btn stop"    onclick="sendCmd('arreter')">✕ ARRÊT</button>
-          </div>
-          <div class="slider-row">
-            <label>INTENSITÉ</label>
-            <input type="range" id="intensity-slider" min="0" max="100" value="50"
-                   oninput="document.getElementById('intensity-val').textContent=this.value+'%'">
-            <span id="intensity-val">50%</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Journal -->
-    <div class="panel log-panel">
+    <div class="log-area">
       <div class="panel-title">Journal vocal</div>
-      <div class="panel-body">
-        <div id="voice-log-desktop"></div>
+      <div class="voice-log" id="voice-log-desktop"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════
+     MOBILE LAYOUT
+═══════════════════════════════════════ -->
+<div class="mobile-layout" id="mobile-layout" style="display:none">
+  <!-- Speed hero -->
+  <div class="mobile-speed-section">
+    <div class="speedometer-wrap" id="speedo-wrap-mobile">
+      <div class="speedometer" id="speedo-mobile">
+        <div class="speedometer-inner">
+          <div class="speed-value" id="val-speed-m">0</div>
+          <div class="speed-unit">km/h</div>
+          <div class="ride-timer-display" id="ride-timer-speedo-m"></div>
+        </div>
+      </div>
+      <div class="lock-overlay" id="lock-overlay-mobile">
+        <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="currentColor"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg>
       </div>
     </div>
+    <div class="telemetry-strip">
+      <div class="pill" style="--pill-color: var(--battery)">
+        <span class="pill-value" id="val-voltage-m">0.0</span><span class="pill-unit">V</span>
+      </div>
+      <div class="pill" style="--pill-color: var(--current)">
+        <span class="pill-value" id="val-current-m">0.0</span><span class="pill-unit">A</span>
+      </div>
+      <div class="pill" style="--pill-color: var(--temp)">
+        <span class="pill-value" id="val-temp-m">0</span><span class="pill-unit">&deg;C</span>
+      </div>
+    </div>
+  </div>
 
-    <!-- Debug modal placeholder (rendu par JS) -->
-
-  </div><!-- /right-col -->
-</div><!-- /main-desktop -->
-
-<!-- ══════════════════════════════════════════
-     MOBILE : sections onglets
-     (display:none sur desktop via CSS)
-════════════════════════════════════════════ -->
-<div class="main" id="main-mobile" style="display:none">
-
-  <!-- Onglet Carte -->
-  <div class="tab-section active" id="tab-map">
+  <!-- Map -->
+  <div class="mobile-map">
     <div id="map"></div>
   </div>
 
-  <!-- Onglet Télémétrie -->
-  <div class="tab-section" id="tab-telemetry">
-    <div class="gauges-grid">
-      <div class="gauge-item">
-        <div class="gauge-arc-wrap">
-          <svg viewBox="0 0 80 48">
-            <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
-            <path id="arc-speed-m" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#58a6ff" stroke-width="6"
-                  stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
-          </svg>
-        </div>
-        <div class="gauge-value" id="val-speed-m">0</div>
-        <div class="gauge-unit">km/h</div>
-        <div class="gauge-label">VITESSE</div>
+  <!-- PTT -->
+  <div class="mobile-ptt-section">
+    <div class="ptt-container">
+      <button class="ptt-btn-new" id="ptt-btn" title="Appuyer pour parler">
+        <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <div class="ptt-ripple"></div>
+      <div class="ptt-ripple"></div>
+      <div class="ptt-ripple"></div>
+    </div>
+    <div class="ptt-status" id="voice-status">Appuyer pour parler</div>
+  </div>
+</div>
+
+<!-- Bottom sheet pills (mobile) -->
+<div class="sheet-pills" id="sheet-pills">
+  <button class="sheet-pill" data-sheet="control" onclick="toggleSheet('control')">Controle</button>
+  <button class="sheet-pill" data-sheet="log" onclick="toggleSheet('log')">Journal</button>
+  <button class="sheet-pill" data-sheet="debug" onclick="toggleSheet('debug')">Debug</button>
+</div>
+
+<!-- Bottom sheet overlay -->
+<div class="bottom-sheet-overlay" id="sheet-overlay" onclick="closeSheet()"></div>
+
+<!-- Bottom sheet: Controle -->
+<div class="bottom-sheet" id="sheet-control">
+  <div class="sheet-handle"></div>
+  <div class="sheet-title">Controle manuel</div>
+  <div class="sheet-body">
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="btn-row">
+        <button class="btn forward" onclick="sendCmd('avancer')">AVANCER</button>
+        <button class="btn brake"   onclick="sendCmd('freiner')">FREINER</button>
+        <button class="btn stop"    onclick="sendCmd('arreter')">ARRET</button>
       </div>
-      <div class="gauge-item">
-        <div class="gauge-arc-wrap">
-          <svg viewBox="0 0 80 48">
-            <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
-            <path id="arc-voltage-m" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#3fb950" stroke-width="6"
-                  stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
-          </svg>
-        </div>
-        <div class="gauge-value" id="val-voltage-m">0.0</div>
-        <div class="gauge-unit">V</div>
-        <div class="gauge-label">BATTERIE</div>
-      </div>
-      <div class="gauge-item">
-        <div class="gauge-arc-wrap">
-          <svg viewBox="0 0 80 48">
-            <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
-            <path id="arc-current-m" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#e3703a" stroke-width="6"
-                  stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
-          </svg>
-        </div>
-        <div class="gauge-value" id="val-current-m">0.0</div>
-        <div class="gauge-unit">A</div>
-        <div class="gauge-label">COURANT</div>
-      </div>
-      <div class="gauge-item">
-        <div class="gauge-arc-wrap">
-          <svg viewBox="0 0 80 48">
-            <path d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#30363d" stroke-width="6" stroke-linecap="round"/>
-            <path id="arc-temp-m" d="M8,44 A36,36 0 0,1 72,44" fill="none" stroke="#d29922" stroke-width="6"
-                  stroke-linecap="round" stroke-dasharray="113" stroke-dashoffset="113" style="transition:stroke-dashoffset 0.4s"/>
-          </svg>
-        </div>
-        <div class="gauge-value" id="val-temp-m">0</div>
-        <div class="gauge-unit">°C</div>
-        <div class="gauge-label">TEMP MOTEUR</div>
+      <div class="slider-row">
+        <label>INTENSITE</label>
+        <input type="range" id="intensity-slider-m" min="0" max="100" value="50"
+               oninput="syncSlider(this)">
+        <span id="intensity-val-m">50%</span>
       </div>
     </div>
   </div>
+</div>
 
-  <!-- Onglet Contrôle -->
-  <div class="tab-section" id="tab-control">
-    <button id="ptt-btn" title="Activer/désactiver le micro">🎤</button>
-    <button id="monitor-btn-mobile" style="font-size:0.8em;padding:6px 12px;background:var(--surface);border:1px solid var(--border);color:var(--muted);cursor:pointer;border-radius:var(--radius);margin-top:6px" title="Écouter le micro ESP32 en direct" onclick="toggleMonitor()">🔊 Monitor</button>
-    <div id="voice-status">INACTIF — appuyer pour parler</div>
-    <hr class="divider">
-    <div class="btn-row">
-      <button class="btn forward" onclick="sendCmd('avancer')">▲ AVANCER</button>
-      <button class="btn brake"   onclick="sendCmd('freiner')">◼ FREINER</button>
-      <button class="btn stop"    onclick="sendCmd('arreter')">✕ ARRÊT</button>
-    </div>
-    <div class="slider-row">
-      <label>INTENSITÉ</label>
-      <input type="range" id="intensity-slider-m" min="0" max="100" value="50"
-             oninput="syncSlider(this)">
-      <span id="intensity-val-m">50%</span>
-    </div>
+<!-- Bottom sheet: Journal -->
+<div class="bottom-sheet" id="sheet-log">
+  <div class="sheet-handle"></div>
+  <div class="sheet-title">Journal vocal</div>
+  <div class="sheet-body" style="padding:0">
+    <div class="voice-log" id="voice-log" style="max-height:50vh"></div>
   </div>
+</div>
 
-  <!-- Onglet Journal -->
-  <div class="tab-section" id="tab-log">
-    <div id="voice-log"></div>
+<!-- Bottom sheet: Debug -->
+<div class="bottom-sheet" id="sheet-debug">
+  <div class="sheet-handle"></div>
+  <div class="sheet-title">Debug ESP32</div>
+  <div class="sheet-body" style="padding:0 16px 16px">
+    <div id="debug-log-mobile" style="height:30vh;overflow-y:auto;font-family:monospace;font-size:12px;padding:8px 0"></div>
   </div>
+</div>
 
-</div><!-- /main-mobile -->
-
-<!-- ── Navigation mobile ── -->
-<nav class="bottom-nav">
-  <div class="bottom-nav-inner">
-    <button class="nav-tab active" data-tab="map"       onclick="showTab('map')">
-      <span class="nav-icon">🗺️</span>Carte
-    </button>
-    <button class="nav-tab"        data-tab="telemetry" onclick="showTab('telemetry')">
-      <span class="nav-icon">📊</span>Données
-    </button>
-    <button class="nav-tab"        data-tab="control"   onclick="showTab('control')">
-      <span class="nav-icon">🎙️</span>Contrôle
-    </button>
-    <button class="nav-tab"        data-tab="log"       onclick="showTab('log')">
-      <span class="nav-icon">📋</span>Journal
-    </button>
-  </div>
-</nav>
-
-<!-- Modal Debug / OTA -->
-<div id="debug-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:90%;max-width:700px;height:70vh;display:flex;flex-direction:column;overflow:hidden">
-    <div style="display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border)">
-      <span style="font-weight:700;flex:1">Debug ESP32 <span id="modal-fw-version" style="font-weight:400;color:var(--muted);font-size:12px"></span></span>
-      <button id="debug-pause-btn" onclick="toggleDebugPause()" style="background:none;border:1px solid var(--border);color:var(--muted);font-size:12px;cursor:pointer;border-radius:4px;padding:2px 8px;margin-right:8px" title="Pause/reprendre le d\u00e9filement">&#9208;</button>
-      <button onclick="document.getElementById('debug-log').innerHTML=''" style="background:none;border:1px solid var(--border);color:var(--muted);font-size:12px;cursor:pointer;border-radius:4px;padding:2px 8px;margin-right:8px" title="Vider les logs">Vider</button>
-      <button onclick="toggleDebug()" style="background:none;border:none;color:var(--text);font-size:20px;cursor:pointer">&times;</button>
+<!-- Debug modal (desktop) -->
+<div class="debug-modal" id="debug-modal">
+  <div class="debug-inner">
+    <div class="debug-header">
+      <span>Debug ESP32 <span id="modal-fw-version" style="font-weight:400;color:var(--muted);font-size:12px"></span></span>
+      <button id="debug-pause-btn" onclick="toggleDebugPause()" title="Pause/reprendre">&#9208;</button>
+      <button onclick="document.getElementById('debug-log').innerHTML=''" title="Vider">Vider</button>
+      <button class="close-btn" onclick="toggleDebug()">&times;</button>
     </div>
-    <div id="debug-log" style="flex:1;min-height:0;overflow-y:auto;padding:8px 12px;font-family:monospace;font-size:12px"></div>
-    <div style="padding:12px 16px;border-top:1px solid var(--border)">
-      <div style="font-weight:600;margin-bottom:8px">Mise a jour firmware</div>
-      <!-- Version actuelle vs disponible -->
-      <div id="ota-versions" style="display:flex;align-items:center;gap:12px;margin-bottom:8px;font-size:12px">
-        <span>Installe : <strong id="ota-installed">—</strong></span>
-        <span>Disponible : <strong id="ota-available">—</strong></span>
-        <span id="ota-update-badge" style="display:none;background:var(--green);color:#000;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700">MAJ disponible</span>
+    <div id="debug-log"></div>
+    <div class="debug-ota">
+      <div class="section-label">Mise a jour firmware</div>
+      <div class="ota-row">
+        <span>Installe : <strong id="ota-installed">&mdash;</strong></span>
+        <span>Disponible : <strong id="ota-available">&mdash;</strong></span>
+        <span id="ota-update-badge" style="display:none;background:var(--green);color:#000;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700">MAJ disponible</span>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <button class="btn" id="ota-check-btn" onclick="checkFirmwareUpdate()" style="padding:6px 12px;font-size:12px;background:var(--surface);border:1px solid var(--border);color:var(--text);cursor:pointer;border-radius:var(--radius)">Verifier les mises a jour</button>
-        <button class="btn forward" id="ota-github-btn" onclick="flashFromGitHub()" disabled style="padding:6px 16px;font-size:12px">Mettre a jour</button>
+      <div class="ota-row">
+        <button class="ota-btn" id="ota-check-btn" onclick="checkFirmwareUpdate()">Verifier les mises a jour</button>
+        <button class="ota-btn primary" id="ota-github-btn" onclick="flashFromGitHub()" disabled>Mettre a jour</button>
       </div>
-      <!-- Rollback : sélecteur de version -->
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <select id="ota-release-select" style="flex:1;padding:4px 8px;font-size:12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius)">
+      <div class="ota-row">
+        <select id="ota-release-select">
           <option value="">-- Rollback vers une version --</option>
         </select>
-        <button class="btn" id="ota-rollback-btn" onclick="flashSelectedVersion()" disabled style="padding:6px 12px;font-size:12px;background:var(--surface);border:1px solid var(--border);color:var(--text);cursor:pointer;border-radius:var(--radius)">Flasher</button>
+        <button class="ota-btn" id="ota-rollback-btn" onclick="flashSelectedVersion()" disabled>Flasher</button>
       </div>
       <div id="ota-status" style="margin-top:6px;font-size:11px;color:var(--muted)"></div>
       <div id="ota-sha256" style="font-size:10px;color:var(--muted);margin-top:2px;word-break:break-all;display:none"></div>
-      <div style="width:100%;height:4px;background:var(--border);border-radius:2px;margin-top:4px">
-        <div id="ota-bar" style="height:100%;background:var(--green);border-radius:2px;width:0;transition:width 0.3s"></div>
+      <div class="ota-progress">
+        <div class="ota-progress-bar" id="ota-bar"></div>
       </div>
-      <!-- Fallback : upload manuel -->
       <details style="margin-top:10px">
         <summary style="font-size:11px;color:var(--muted);cursor:pointer">Upload manuel (.bin)</summary>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+        <div class="ota-row" style="margin-top:6px">
           <input type="file" id="fw-file" accept=".bin" style="flex:1;font-size:12px">
-          <button class="btn forward" id="ota-upload-btn" onclick="uploadFirmware()" disabled style="padding:6px 16px;font-size:12px">Flasher</button>
+          <button class="ota-btn primary" id="ota-upload-btn" onclick="uploadFirmware()" disabled>Flasher</button>
         </div>
       </details>
     </div>
@@ -701,13 +916,13 @@
 </div>
 
 <script>
-// ─── Détection mobile ─────────────────────────────────────────────────────────
+// ── Detection mobile ─────────────────────────────────────────────────────────
 const isMobile = () => window.innerWidth <= 767;
 
-// ─── Configuration ────────────────────────────────────────────────────────────
+// ── Configuration ────────────────────────────────────────────────────────────
 const AUDIO_CHUNK = 4096;
 
-// ─── Auth ─────────────────────────────────────────────────────────────────────
+// ── Auth ─────────────────────────────────────────────────────────────────────
 const TOKEN_KEY = 'trottinette_token';
 function getToken() { return sessionStorage.getItem(TOKEN_KEY); }
 function authFetch(url, opts = {}) {
@@ -719,7 +934,7 @@ function authFetch(url, opts = {}) {
 }
 function logout() { sessionStorage.removeItem(TOKEN_KEY); location.reload(); }
 
-// ── Login ─────────────────────────────────────────────────────────────────────
+// ── Login ────────────────────────────────────────────────────────────────────
 document.getElementById('login-submit').addEventListener('click', doLogin);
 document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 document.getElementById('login-user').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('login-pass').focus(); });
@@ -760,28 +975,58 @@ async function doLogin() {
   } catch (_) {}
 })();
 
-// ─── Navigation mobile ────────────────────────────────────────────────────────
-function showTab(name) {
-  document.querySelectorAll('.tab-section').forEach(s => s.classList.remove('active'));
-  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
-  const section = document.getElementById('tab-' + name);
-  if (section) section.classList.add('active');
-  const btn = document.querySelector(`.nav-tab[data-tab="${name}"]`);
-  if (btn) btn.classList.add('active');
-  // Invalider la carte si on l'affiche à nouveau
-  if (name === 'map' && map) setTimeout(() => map.invalidateSize(), 50);
-}
-
-// ─── Choisir le bon layout selon la taille ───────────────────────────────────
+// ── Layout ───────────────────────────────────────────────────────────────────
 function applyLayout() {
   const mobile = isMobile();
-  document.getElementById('main-desktop').style.display = mobile ? 'none' : '';
-  document.getElementById('main-mobile').style.display  = mobile ? 'block' : 'none';
+  document.getElementById('desktop-layout').style.display = mobile ? 'none' : '';
+  document.getElementById('mobile-layout').style.display  = mobile ? 'flex' : 'none';
 }
 applyLayout();
 window.addEventListener('resize', applyLayout);
 
-// ─── État ─────────────────────────────────────────────────────────────────────
+// ── Bottom sheets (mobile) ───────────────────────────────────────────────────
+let activeSheet = null;
+
+function toggleSheet(name) {
+  if (activeSheet === name) {
+    closeSheet();
+    return;
+  }
+  closeSheet();
+  activeSheet = name;
+  const sheet = document.getElementById('sheet-' + name);
+  const overlay = document.getElementById('sheet-overlay');
+  if (sheet) {
+    overlay.classList.add('visible');
+    sheet.classList.add('open');
+  }
+  document.querySelectorAll('.sheet-pill').forEach(p => {
+    p.classList.toggle('active', p.dataset.sheet === name);
+  });
+}
+
+function closeSheet() {
+  activeSheet = null;
+  document.getElementById('sheet-overlay').classList.remove('visible');
+  document.querySelectorAll('.bottom-sheet').forEach(s => s.classList.remove('open'));
+  document.querySelectorAll('.sheet-pill').forEach(p => p.classList.remove('active'));
+}
+
+// ── Settings dropdown ────────────────────────────────────────────────────────
+function toggleSettings() {
+  const dd = document.getElementById('settings-dropdown');
+  dd.classList.toggle('open');
+}
+// Close settings when clicking outside
+document.addEventListener('click', (e) => {
+  const dd = document.getElementById('settings-dropdown');
+  const btn = document.getElementById('settings-btn');
+  if (!dd.contains(e.target) && !btn.contains(e.target)) {
+    dd.classList.remove('open');
+  }
+});
+
+// ── Etat ─────────────────────────────────────────────────────────────────────
 let simMode       = false;
 let simInterval   = null;
 let sseSource     = null;
@@ -793,39 +1038,46 @@ let audioQueue    = [];
 let isPlayingAudio= false;
 let map, mapDesktop;
 let lastPos = [46.8492, -71.3434];
-// Multi-trottinettes : marqueurs par scooterId
-const scooterMarkers = new Map();  // id → { mobile: L.marker, desktop: L.marker }
+const scooterMarkers = new Map();
 let selectedScooterIdLocal = null;
 
-// ─── Carte ────────────────────────────────────────────────────────────────────
-function makeIcon(color = '#58a6ff') {
+// ── Carte ────────────────────────────────────────────────────────────────────
+function makeScooterIcon(color = '#00f8ce') {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="${color}" stroke="#fff" stroke-width="0.5">
+    <circle cx="6" cy="19" r="2.5" fill="none" stroke="${color}" stroke-width="1.5"/>
+    <circle cx="18" cy="19" r="2.5" fill="none" stroke="${color}" stroke-width="1.5"/>
+    <path d="M18 19V8l-4-3H9l-1 4h5l2 2v8" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="14" y1="5" x2="16" y2="3" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/>
+  </svg>`;
   return L.divIcon({
-    html: `<div style="width:14px;height:14px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 0 8px ${color}"></div>`,
-    iconSize: [14,14], iconAnchor: [7,7]
+    html: svg,
+    iconSize: [28, 28], iconAnchor: [14, 14],
+    className: ''
   });
 }
 
+const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+
 function initMap() {
   map = L.map('map', { zoomControl: false }).setView(lastPos, 15);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map);
+  L.tileLayer(DARK_TILES, { attribution: '&copy; CartoDB' }).addTo(map);
 
   mapDesktop = L.map('map-desktop', { zoomControl: true }).setView(lastPos, 15);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(mapDesktop);
+  L.tileLayer(DARK_TILES, { attribution: '&copy; CartoDB' }).addTo(mapDesktop);
 }
 
 function updateScooterMarker(scooterId, lat, lon) {
   if (!lat || !lon) return;
   const pos = [lat, lon];
   const isSelected = scooterId === selectedScooterIdLocal;
-  const color = isSelected ? '#58a6ff' : '#8b949e';
+  const color = isSelected ? '#00f8ce' : '#888';
 
   let markers = scooterMarkers.get(scooterId);
   if (!markers) {
     markers = {
-      mobile:  L.marker(pos, { icon: makeIcon(color) }).addTo(map),
-      desktop: L.marker(pos, { icon: makeIcon(color) }).addTo(mapDesktop)
+      mobile:  L.marker(pos, { icon: makeScooterIcon(color) }).addTo(map),
+      desktop: L.marker(pos, { icon: makeScooterIcon(color) }).addTo(mapDesktop)
     };
-    // Tooltip avec l'ID court
     const shortId = scooterId.split(':').slice(-2).join(':');
     markers.mobile.bindTooltip(shortId, { permanent: false });
     markers.desktop.bindTooltip(shortId, { permanent: false });
@@ -835,7 +1087,6 @@ function updateScooterMarker(scooterId, lat, lon) {
     markers.desktop.setLatLng(pos);
   }
 
-  // Centrer la carte sur la trottinette sélectionnée
   if (isSelected) {
     lastPos = pos;
     map.panTo(pos);
@@ -845,9 +1096,9 @@ function updateScooterMarker(scooterId, lat, lon) {
 
 function refreshMarkerColors() {
   for (const [id, markers] of scooterMarkers) {
-    const color = id === selectedScooterIdLocal ? '#58a6ff' : '#8b949e';
-    markers.mobile.setIcon(makeIcon(color));
-    markers.desktop.setIcon(makeIcon(color));
+    const color = id === selectedScooterIdLocal ? '#00f8ce' : '#888';
+    markers.mobile.setIcon(makeScooterIcon(color));
+    markers.desktop.setIcon(makeScooterIcon(color));
   }
 }
 
@@ -860,51 +1111,41 @@ function removeScooterMarker(scooterId) {
   }
 }
 
-// Compat ancien code
 function updateMapPos(lat, lon) {
   if (selectedScooterIdLocal) {
     updateScooterMarker(selectedScooterIdLocal, lat, lon);
   }
 }
 
-// ─── Jauges ───────────────────────────────────────────────────────────────────
-// desktop IDs → mobile IDs
-const GAUGE_CFG = {
-  speed:   { el:'arc-speed',   val:'val-speed',   elM:'arc-speed-m',   valM:'val-speed-m',   max:45,  decimals:0 },
-  voltage: { el:'arc-voltage', val:'val-voltage',  elM:'arc-voltage-m', valM:'val-voltage-m', max:60,  decimals:1 },
-  current: { el:'arc-current', val:'val-current',  elM:'arc-current-m', valM:'val-current-m', max:30,  decimals:1 },
-  temp:    { el:'arc-temp',    val:'val-temp',      elM:'arc-temp-m',    valM:'val-temp-m',    max:120, decimals:0 }
-};
+// ── Speedometer + telemetry ──────────────────────────────────────────────────
+const SPEED_MAX = 30;
 
-function updateGauge(key, value) {
-  const cfg = GAUGE_CFG[key]; if (!cfg) return;
-  const ratio  = Math.min(Math.max(value / cfg.max, 0), 1);
-  const offset = 113 * (1 - ratio);
-  const text   = value.toFixed(cfg.decimals);
-  // desktop
-  const arcD = document.getElementById(cfg.el); if (arcD) arcD.style.strokeDashoffset = offset;
-  const valD = document.getElementById(cfg.val); if (valD) valD.textContent = text;
-  // mobile
-  const arcM = document.getElementById(cfg.elM); if (arcM) arcM.style.strokeDashoffset = offset;
-  const valM = document.getElementById(cfg.valM); if (valM) valM.textContent = text;
+function updateSpeedometer(speed) {
+  const pct = Math.min(Math.max(speed / SPEED_MAX, 0), 1) * 100;
+  document.getElementById('speedo-desktop').style.setProperty('--speed-pct', pct);
+  document.getElementById('speedo-mobile').style.setProperty('--speed-pct', pct);
+  document.getElementById('val-speed').textContent = Math.round(speed);
+  document.getElementById('val-speed-m').textContent = Math.round(speed);
+}
+
+function updatePill(id, idM, value, decimals) {
+  const text = value.toFixed(decimals);
+  const el = document.getElementById(id); if (el) el.textContent = text;
+  const elM = document.getElementById(idM); if (elM) elM.textContent = text;
 }
 
 function applyTelemetry(data) {
-  if (data.speed   !== undefined) updateGauge('speed',   data.speed);
-  if (data.voltage !== undefined) updateGauge('voltage', data.voltage);
-  if (data.current !== undefined) updateGauge('current', data.current);
-  if (data.temp    !== undefined) updateGauge('temp',    data.temp);
+  if (data.speed   !== undefined) updateSpeedometer(data.speed);
+  if (data.voltage !== undefined) updatePill('val-voltage', 'val-voltage-m', data.voltage, 1);
+  if (data.current !== undefined) updatePill('val-current', 'val-current-m', data.current, 1);
+  if (data.temp    !== undefined) updatePill('val-temp',    'val-temp-m',    data.temp,    0);
   if (data.lat !== undefined && data.lon !== undefined) updateMapPos(data.lat, data.lon);
 }
 
-// ─── Journal vocal ────────────────────────────────────────────────────────────
-// On écrit dans les deux logs (desktop + mobile) qui partagent le même contenu via un seul <div id="voice-log">
-// Note : seul #voice-log (mobile) existe en double ; on utilise une fonction qui écrit dans les deux.
-
+// ── Journal vocal ────────────────────────────────────────────────────────────
 let _currentAiEntry = null;
 
 function getLogEl() {
-  // Retourner le log visible selon le layout
   return isMobile()
     ? document.getElementById('voice-log')
     : document.getElementById('voice-log-desktop');
@@ -916,7 +1157,6 @@ function addLog(type, text) {
 }
 
 function appendAiDelta(delta) {
-  // Écrire dans les deux conteneurs pour garder la sync
   ['voice-log', 'voice-log-desktop'].forEach(id => {
     const el = document.getElementById(id); if (!el) return;
     let entry = el._currentAiEntry;
@@ -953,13 +1193,13 @@ function _appendLogEntry(type, text) {
 function pad(n) { return String(n).padStart(2,'0'); }
 function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-// ─── Indicateurs ──────────────────────────────────────────────────────────────
+// ── Indicateurs ──────────────────────────────────────────────────────────────
 function setDot(id, state) {
   const el = document.getElementById(id);
   if (el) el.className = `dot${state ? ' '+state : ''}`;
 }
 
-// ─── SSE ──────────────────────────────────────────────────────────────────────
+// ── SSE ──────────────────────────────────────────────────────────────────────
 function connectSSE() {
   if (simMode) return;
   if (sseSource) sseSource.close();
@@ -974,18 +1214,16 @@ function connectSSE() {
 
 function handleSSEMessage(msg) {
   switch (msg.type) {
-    case 'transcript':  addLog('transcript', '🎤 ' + msg.text); break;
+    case 'transcript':  addLog('transcript', msg.text); break;
     case 'ai_response': appendAiDelta(msg.text); break;
     case 'audio':       enqueueAudio(msg.data); break;
     case 'cmd':
-      addLog('cmd', `⚡ ${msg.action.toUpperCase()}${msg.intensity != null ? ' @ ' + Math.round(msg.intensity * 100) + '%' : ''}`);
+      addLog('cmd', `${msg.action.toUpperCase()}${msg.intensity != null ? ' @ ' + Math.round(msg.intensity * 100) + '%' : ''}`);
       break;
     case 'telemetry':
-      // Mettre à jour le marqueur de cette trottinette sur la carte
       if (msg.scooterId) {
         updateScooterMarker(msg.scooterId, msg.lat, msg.lon);
       }
-      // Mettre à jour les jauges uniquement pour la trottinette sélectionnée
       if (!msg.scooterId || msg.scooterId === selectedScooterIdLocal) {
         applyTelemetry(msg);
       }
@@ -1007,7 +1245,7 @@ function handleSSEMessage(msg) {
       }
       break;
     case 'lock_blocked':
-      addLog('warn', msg.message || 'Commande bloquée — trottinette verrouillée');
+      addLog('warn', msg.message || 'Commande bloquee -- trottinette verrouillee');
       break;
     case 'ride_started':
       if (msg.scooterId === selectedScooterIdLocal) {
@@ -1015,7 +1253,7 @@ function handleSSEMessage(msg) {
         rideStartTime = new Date().toISOString();
         updateLockUI(false);
         if (!rideTimerInterval) rideTimerInterval = setInterval(updateRideTimer, 1000);
-        addLog('sys', `Course ${msg.rideId} démarrée`);
+        addLog('sys', `Course ${msg.rideId} demarree`);
       }
       break;
     case 'ride_ended':
@@ -1025,19 +1263,21 @@ function handleSSEMessage(msg) {
         if (rideTimerInterval) { clearInterval(rideTimerInterval); rideTimerInterval = null; }
         const timerEl = document.getElementById('ride-timer');
         if (timerEl) timerEl.style.display = 'none';
+        hideRideTimerSpeedo();
         updateLockUI(true);
-        addLog('sys', `Course terminée (${msg.ride?.durationSec || 0}s)`);
+        addLog('sys', `Course terminee (${msg.ride?.durationSec || 0}s)`);
       }
       break;
   }
 }
 
-// ─── Lecture audio PCM16 ──────────────────────────────────────────────────────
+// ── Lecture audio PCM16 ──────────────────────────────────────────────────────
 let assistantMuted = false;
 
 function toggleMute() {
   assistantMuted = !assistantMuted;
-  document.getElementById('mute-btn').textContent = assistantMuted ? '🔇' : '🔊';
+  const item = document.getElementById('mute-item');
+  if (item) item.classList.toggle('active', assistantMuted);
   if (assistantMuted) { audioQueue.length = 0; isPlayingAudio = false; }
 }
 
@@ -1074,7 +1314,7 @@ async function playNextAudio() {
   } catch (err) { console.warn('[audio]', err); playNextAudio(); }
 }
 
-// ─── Statut proxy ─────────────────────────────────────────────────────────────
+// ── Statut proxy ─────────────────────────────────────────────────────────────
 function fetchStatus() {
   authFetch('/status')
     .then(r => r.ok ? r.json() : Promise.reject())
@@ -1085,14 +1325,12 @@ function fetchStatus() {
       const fwEl = document.getElementById('fw-version');
       if (fwEl) fwEl.textContent = s.fw_version ? 'FW ' + s.fw_version : '';
       const otaInstalled = document.getElementById('ota-installed');
-      if (otaInstalled) otaInstalled.textContent = s.fw_version || '—';
+      if (otaInstalled) otaInstalled.textContent = s.fw_version || '\u2014';
       esp32Debug = !!s.debug;
       updateDebugBtn();
-      // Multi-trottinettes
       if (s.selected_scooter) selectedScooterIdLocal = s.selected_scooter;
       const countEl = document.getElementById('scooter-count');
       if (countEl) countEl.textContent = s.scooter_count || 0;
-      // Verrouillage et course active
       updateLockUI(s.locked !== false);
       if (s.active_ride) {
         activeRideId = s.active_ride.id;
@@ -1102,11 +1340,10 @@ function fetchStatus() {
       }
     })
     .catch(() => {});
-  // Charger la liste des trottinettes
   fetchScooters();
 }
 
-// ─── Multi-trottinettes ─────────────────────────────────────────────────────
+// ── Multi-trottinettes ──────────────────────────────────────────────────────
 function fetchScooters() {
   authFetch('/api/scooters')
     .then(r => r.ok ? r.json() : Promise.reject())
@@ -1119,7 +1356,6 @@ function updateScooterList(list) {
   const countEl = document.getElementById('scooter-count');
   if (!select) return;
 
-  // Garder la sélection actuelle
   const currentVal = select.value;
   select.innerHTML = '';
 
@@ -1131,14 +1367,12 @@ function updateScooterList(list) {
       const opt = document.createElement('option');
       opt.value = s.id;
       const shortId = s.name || s.id.split(':').slice(-2).join(':');
-      const lockIcon = s.locked ? ' 🔒' : '';
       const status = s.connected ? '' : ' [hors ligne]';
-      opt.textContent = `${shortId}${lockIcon}${status}`;
+      opt.textContent = `${shortId}${status}`;
       opt.selected = s.selected;
       if (s.selected) {
         selectedScooterIdLocal = s.id;
         updateLockUI(s.locked);
-        // Mettre à jour l'état de la course active
         if (s.activeRide) {
           activeRideId = s.activeRide.id;
           rideStartTime = s.activeRide.startedAt;
@@ -1149,6 +1383,7 @@ function updateScooterList(list) {
           if (rideTimerInterval) { clearInterval(rideTimerInterval); rideTimerInterval = null; }
           const timerEl = document.getElementById('ride-timer');
           if (timerEl) timerEl.style.display = 'none';
+          hideRideTimerSpeedo();
         }
       }
       select.appendChild(opt);
@@ -1158,12 +1393,10 @@ function updateScooterList(list) {
   if (countEl) countEl.textContent = list.length;
   setDot('dot-ws', list.some(s => s.selected && s.connected) ? 'on' : 'err');
 
-  // Mettre à jour les marqueurs : retirer ceux qui ne sont plus connectés
   const connectedIds = new Set(list.filter(s => s.connected).map(s => s.id));
   for (const id of scooterMarkers.keys()) {
     if (!connectedIds.has(id)) removeScooterMarker(id);
   }
-  // Mettre à jour les positions de toutes les trottinettes connectées
   for (const s of list) {
     if (s.connected && s.telemetry.lat && s.telemetry.lon) {
       updateScooterMarker(s.id, s.telemetry.lat, s.telemetry.lon);
@@ -1187,7 +1420,7 @@ async function selectScooter(id) {
   } catch (_) {}
 }
 
-// ─── Commandes manuelles ──────────────────────────────────────────────────────
+// ── Commandes manuelles ──────────────────────────────────────────────────────
 function getIntensity() {
   const d = document.getElementById('intensity-slider');
   const m = document.getElementById('intensity-slider-m');
@@ -1198,15 +1431,14 @@ function getIntensity() {
 function syncSlider(src) {
   const val = src.value + '%';
   document.getElementById('intensity-val-m').textContent = val;
-  // sync desktop aussi si présent
   const d = document.getElementById('intensity-slider');
   if (d) { d.value = src.value; document.getElementById('intensity-val').textContent = val; }
 }
 
 function sendCmd(action) {
-  if (simMode) { addLog('cmd', `⚡ [SIM] ${action.toUpperCase()}`); return; }
+  if (simMode) { addLog('cmd', `[SIM] ${action.toUpperCase()}`); return; }
   if (scooterLocked && ['avancer', 'freiner', 'vitesse_lente', 'vitesse_moyenne', 'vitesse_haute'].includes(action)) {
-    addLog('warn', 'Trottinette verrouillée — démarrez une course ou déverrouillez');
+    addLog('warn', 'Trottinette verrouillee -- demarrez une course ou deverrouillez');
     return;
   }
   authFetch('/cmd', {
@@ -1215,7 +1447,7 @@ function sendCmd(action) {
   }).catch(console.error);
 }
 
-// ─── Verrouillage / Déverrouillage ───────────────────────────────────────────
+// ── Verrouillage / Deverrouillage ───────────────────────────────────────────
 let scooterLocked = true;
 let activeRideId = null;
 let rideStartTime = null;
@@ -1225,12 +1457,29 @@ function updateLockUI(locked) {
   scooterLocked = locked;
   const lockBtn = document.getElementById('lock-btn');
   const rideBtn = document.getElementById('ride-btn');
+
+  // Lock button style
   if (lockBtn) {
-    lockBtn.textContent = locked ? '🔒' : '🔓';
     lockBtn.style.borderColor = locked ? 'var(--red)' : 'var(--green)';
     lockBtn.style.color = locked ? 'var(--red)' : 'var(--green)';
-    lockBtn.title = locked ? 'Déverrouiller la trottinette' : 'Verrouiller la trottinette';
+    lockBtn.title = locked ? 'Deverrouiller la trottinette' : 'Verrouiller la trottinette';
+    // Change SVG to show locked/unlocked
+    if (locked) {
+      lockBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+    } else {
+      lockBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 8-3"/></svg>';
+    }
   }
+
+  // Lock overlay on speedometer
+  document.getElementById('lock-overlay-desktop').classList.toggle('visible', locked);
+  document.getElementById('lock-overlay-mobile').classList.toggle('visible', locked);
+
+  // Riding state on speedometer
+  const isRiding = !!activeRideId;
+  document.getElementById('speedo-wrap-desktop').classList.toggle('riding', isRiding);
+  document.getElementById('speedo-wrap-mobile').classList.toggle('riding', isRiding);
+
   if (rideBtn) {
     rideBtn.style.display = '';
     if (activeRideId) {
@@ -1245,16 +1494,33 @@ function updateLockUI(locked) {
   }
 }
 
+function hideRideTimerSpeedo() {
+  ['ride-timer-speedo', 'ride-timer-speedo-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+}
+
 function updateRideTimer() {
   if (!rideStartTime) return;
   const elapsed = Math.round((Date.now() - new Date(rideStartTime).getTime()) / 1000);
   const min = Math.floor(elapsed / 60);
   const sec = elapsed % 60;
+  const timeStr = `${min}:${sec.toString().padStart(2, '0')}`;
+
   const timerEl = document.getElementById('ride-timer');
   if (timerEl) {
     timerEl.style.display = '';
-    timerEl.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+    timerEl.textContent = timeStr;
   }
+  // Show ride timer in speedometer
+  ['ride-timer-speedo', 'ride-timer-speedo-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.style.display = '';
+      el.textContent = timeStr;
+    }
+  });
 }
 
 async function toggleLock() {
@@ -1267,7 +1533,7 @@ async function toggleLock() {
     if (r.ok) {
       const data = await r.json();
       updateLockUI(data.locked);
-      addLog('sys', `Trottinette ${data.locked ? 'verrouillée' : 'déverrouillée'}`);
+      addLog('sys', `Trottinette ${data.locked ? 'verrouillee' : 'deverrouillee'}`);
     }
   } catch (err) { console.error('[lock]', err); }
 }
@@ -1275,7 +1541,6 @@ async function toggleLock() {
 async function toggleRide() {
   try {
     if (activeRideId) {
-      // Terminer la course
       const r = await authFetch('/api/rides/end', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1288,11 +1553,11 @@ async function toggleRide() {
         if (rideTimerInterval) { clearInterval(rideTimerInterval); rideTimerInterval = null; }
         const timerEl = document.getElementById('ride-timer');
         if (timerEl) timerEl.style.display = 'none';
+        hideRideTimerSpeedo();
         updateLockUI(true);
-        addLog('sys', `Course terminée (${data.ride.durationSec}s)`);
+        addLog('sys', `Course terminee (${data.ride.durationSec}s)`);
       }
     } else {
-      // Démarrer une course (déverrouille automatiquement)
       const r = await authFetch('/api/rides/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1304,26 +1569,30 @@ async function toggleRide() {
         rideStartTime = new Date().toISOString();
         updateLockUI(false);
         rideTimerInterval = setInterval(updateRideTimer, 1000);
-        addLog('sys', `Course ${data.rideId} démarrée`);
+        addLog('sys', `Course ${data.rideId} demarree`);
       }
     }
   } catch (err) { console.error('[ride]', err); }
 }
 
-// ─── Bouton PTT ───────────────────────────────────────────────────────────────
-// Mobile (#ptt-btn) + desktop (#ptt-btn-desktop) synchronisés
+// ── Bouton PTT ───────────────────────────────────────────────────────────────
 const PTT_IDS = ['ptt-btn', 'ptt-btn-desktop'];
 
 function setVoiceState(recording) {
   PTT_IDS.forEach(id => {
     const btn = document.getElementById(id); if (!btn) return;
-    btn.textContent = recording ? '🔴' : '🎤';
     btn.classList.toggle('active', recording);
+    // Change SVG icon when recording
+    if (recording) {
+      btn.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="currentColor"/></svg>';
+    } else {
+      btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+    }
   });
   const statEl = document.getElementById('voice-status');
-  if (statEl) statEl.textContent = recording ? 'ACTIF — appuyer pour arrêter' : 'INACTIF — appuyer pour parler';
+  if (statEl) statEl.textContent = recording ? 'Actif -- appuyer pour arreter' : 'Appuyer pour parler';
   const statD = document.getElementById('voice-status-desktop');
-  if (statD)  statD.textContent  = recording ? 'ACTIF — cliquer pour arrêter'  : 'INACTIF — cliquer pour parler';
+  if (statD) statD.textContent = recording ? 'Actif -- cliquer pour arreter' : 'Cliquer pour parler';
 }
 
 async function startRecording() {
@@ -1354,7 +1623,7 @@ function stopRecording() {
   if (processor)   { processor.disconnect(); processor = null; }
   if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
   setVoiceState(false);
-  addLog('system', 'Microphone coupé');
+  addLog('system', 'Microphone coupe');
 }
 
 function toggleRecording() {
@@ -1377,12 +1646,12 @@ function sendAudioChunk(pcm16) {
   }).catch(console.error);
 }
 
-// ─── Monitor micro ESP32 (écoute en direct via WebSocket) ─────────────────────
+// ── Monitor micro ESP32 ──────────────────────────────────────────────────────
 let monitorWs = null;
 let monitorCtx = null;
 let monitorActive = false;
-let monitorNextTime = 0;        // quand planifier le prochain chunk
-const MONITOR_JITTER_MS = 0.25; // buffer de jitter en secondes (250 ms)
+let monitorNextTime = 0;
+const MONITOR_JITTER_MS = 0.25;
 
 function toggleMonitor() {
   if (monitorActive) stopMonitor(); else startMonitor();
@@ -1396,7 +1665,7 @@ function startMonitor() {
   monitorWs.binaryType = 'arraybuffer';
   monitorWs.onopen = () => {
     monitorActive = true;
-    updateMonitorBtns();
+    updateMonitorBtn();
     addLog('system', 'Monitor micro ESP32 actif');
   };
   monitorWs.onclose = () => { stopMonitor(); };
@@ -1408,7 +1677,6 @@ function startMonitor() {
     for (let i = 0; i < pcm16.length; i++) ch[i] = pcm16[i] / 32768;
 
     const now = monitorCtx.currentTime;
-    // Premier chunk ou retard trop grand → resync avec buffer de jitter
     if (monitorNextTime < now) {
       monitorNextTime = now + MONITOR_JITTER_MS;
     }
@@ -1425,28 +1693,15 @@ function stopMonitor() {
   monitorActive = false;
   if (monitorWs) { monitorWs.close(); monitorWs = null; }
   if (monitorCtx) { monitorCtx.close(); monitorCtx = null; }
-  updateMonitorBtns();
+  updateMonitorBtn();
 }
 
-function updateMonitorBtns() {
-  ['monitor-btn-desktop', 'monitor-btn-mobile'].forEach(id => {
-    const btn = document.getElementById(id);
-    if (!btn) return;
-    if (monitorActive) {
-      btn.style.background = 'rgba(63,185,80,0.15)';
-      btn.style.color = 'var(--green)';
-      btn.style.borderColor = 'var(--green)';
-      btn.textContent = '🔊 Monitor ON';
-    } else {
-      btn.style.background = 'var(--surface)';
-      btn.style.color = 'var(--muted)';
-      btn.style.borderColor = 'var(--border)';
-      btn.textContent = '🔊 Monitor';
-    }
-  });
+function updateMonitorBtn() {
+  const item = document.getElementById('monitor-item');
+  if (item) item.classList.toggle('active', monitorActive);
 }
 
-// ─── Debug ESP32 ─────────────────────────────────────────────────────────────
+// ── Debug ESP32 ──────────────────────────────────────────────────────────────
 let esp32Debug = false;
 
 function toggleDebug() {
@@ -1459,14 +1714,10 @@ function toggleDebug() {
 }
 
 function updateDebugBtn() {
-  const btn = document.getElementById('debug-btn');
-  if (!btn) return;
-  btn.style.background = esp32Debug ? 'rgba(63,185,80,0.2)' : '';
-  btn.style.color = esp32Debug ? 'var(--green)' : '';
-  // Show/hide debug modal
+  const item = document.getElementById('debug-item');
+  if (item) item.classList.toggle('active', esp32Debug);
   const modal = document.getElementById('debug-modal');
-  if (modal) modal.style.display = esp32Debug ? 'flex' : 'none';
-  // Update version in modal
+  if (modal) modal.classList.toggle('open', esp32Debug);
   const fwEl = document.getElementById('modal-fw-version');
   const fwMain = document.getElementById('fw-version');
   if (fwEl && fwMain) fwEl.textContent = fwMain.textContent;
@@ -1484,16 +1735,18 @@ function toggleDebugPause() {
 }
 
 function appendDebugLog(msg) {
-  const el = document.getElementById('debug-log');
-  if (!el) return;
-  const line = document.createElement('div');
-  line.textContent = new Date().toLocaleTimeString() + ' ' + msg;
-  el.appendChild(line);
-  while (el.children.length > 500) el.removeChild(el.firstChild);
-  if (!debugPaused) el.scrollTop = el.scrollHeight;
+  ['debug-log', 'debug-log-mobile'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const line = document.createElement('div');
+    line.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+    el.appendChild(line);
+    while (el.children.length > 500) el.removeChild(el.firstChild);
+    if (!debugPaused) el.scrollTop = el.scrollHeight;
+  });
 }
 
-// ─── Upload firmware OTA depuis la page ──────────────────────────────────────
+// ── Upload firmware OTA ──────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   const fwFile = document.getElementById('fw-file');
   if (fwFile) fwFile.addEventListener('change', () => {
@@ -1522,9 +1775,8 @@ async function uploadFirmware() {
     });
     const data = await r.json();
     if (r.ok) {
-      statusEl.textContent = data.message || 'Firmware flash\u00e9 !';
+      statusEl.textContent = data.message || 'Firmware flashe !';
       barEl.style.width = '100%';
-      // Refresh status after reboot
       setTimeout(fetchStatus, 8000);
     } else {
       statusEl.textContent = 'Erreur: ' + (data.error || r.status);
@@ -1536,10 +1788,9 @@ async function uploadFirmware() {
   btn.disabled = false;
 }
 
-// ─── Mise a jour firmware depuis GitHub Releases ─────────────────────────────
+// ── Mise a jour firmware depuis GitHub Releases ──────────────────────────────
 let latestRelease = null;
 
-// Compare deux versions "AAAA.MM.XX" — retourne >0 si a > b
 function compareVersions(a, b) {
   const pa = a.split('.').map(Number);
   const pb = b.split('.').map(Number);
@@ -1556,7 +1807,7 @@ async function checkFirmwareUpdate() {
   const ghBtn = document.getElementById('ota-github-btn');
   const checkBtn = document.getElementById('ota-check-btn');
 
-  statusEl.textContent = 'Vérification...';
+  statusEl.textContent = 'Verification...';
   checkBtn.disabled = true;
 
   try {
@@ -1568,44 +1819,41 @@ async function checkFirmwareUpdate() {
     latestRelease = await r.json();
     availEl.textContent = latestRelease.version;
 
-    // Indiquer si le build est prêt
     if (latestRelease.build_ready) {
-      availEl.textContent += ' (prêt)';
+      availEl.textContent += ' (pret)';
     } else {
       availEl.textContent += ' (compilation...)';
     }
 
     const installedEl = document.getElementById('ota-installed');
-    const installed = installedEl ? installedEl.textContent : '—';
+    const installed = installedEl ? installedEl.textContent : '\u2014';
 
-    if (installed !== '—' && compareVersions(latestRelease.version, installed) > 0) {
+    if (installed !== '\u2014' && compareVersions(latestRelease.version, installed) > 0) {
       badgeEl.style.display = 'inline';
       ghBtn.disabled = false;
       statusEl.textContent = latestRelease.build_ready
-        ? 'Nouvelle version prête à flasher !'
+        ? 'Nouvelle version prete a flasher !'
         : 'Nouvelle version disponible (compilation en cours sur le serveur)';
-    } else if (installed !== '—' && compareVersions(latestRelease.version, installed) <= 0) {
+    } else if (installed !== '\u2014' && compareVersions(latestRelease.version, installed) <= 0) {
       badgeEl.style.display = 'none';
       ghBtn.disabled = true;
-      statusEl.textContent = 'Firmware à jour.';
+      statusEl.textContent = 'Firmware a jour.';
     } else {
       ghBtn.disabled = false;
       badgeEl.style.display = 'none';
       statusEl.textContent = '';
     }
 
-    // Afficher le SHA256 si disponible
     if (latestRelease.sha256) {
       const sha256El = document.getElementById('ota-sha256');
       sha256El.textContent = 'SHA256: ' + latestRelease.sha256;
       sha256El.style.display = 'block';
     }
 
-    // Charger la liste des releases pour le rollback
     loadReleasesList();
   } catch (err) {
     statusEl.textContent = 'Erreur: ' + err.message;
-    availEl.textContent = '—';
+    availEl.textContent = '\u2014';
     badgeEl.style.display = 'none';
     ghBtn.disabled = true;
   }
@@ -1623,7 +1871,7 @@ async function loadReleasesList() {
     for (const rel of releases) {
       const opt = document.createElement('option');
       opt.value = rel.version;
-      const readyTag = rel.build_ready ? ' [prêt]' : '';
+      const readyTag = rel.build_ready ? ' [pret]' : '';
       opt.textContent = `v${rel.version} (${new Date(rel.published_at).toLocaleDateString('fr-FR')})${readyTag}`;
       select.appendChild(opt);
     }
@@ -1660,7 +1908,6 @@ async function flashSelectedVersion() {
       rollbackBtn.disabled = false;
       if (ghBtn) ghBtn.disabled = false;
     }
-    // Si ok, la progression arrive via SSE (ota_build events)
   } catch (err) {
     statusEl.textContent = 'Erreur: ' + err.message;
     barEl.style.background = 'var(--red)';
@@ -1678,7 +1925,6 @@ function handleBuildEvent(msg) {
 
   statusEl.textContent = msg.msg || '';
 
-  // Afficher le SHA256 si présent
   if (msg.sha256) {
     sha256El.textContent = 'SHA256: ' + msg.sha256;
     sha256El.style.display = 'block';
@@ -1728,7 +1974,6 @@ async function flashFromGitHub() {
       barEl.style.background = 'var(--red)';
       ghBtn.disabled = false;
     }
-    // Si ok, la progression arrive via SSE (ota_build events)
   } catch (err) {
     statusEl.textContent = 'Erreur: ' + err.message;
     barEl.style.background = 'var(--red)';
@@ -1736,48 +1981,27 @@ async function flashFromGitHub() {
   }
 }
 
-// Attacher les événements aux deux boutons PTT
+// Attach PTT events
 PTT_IDS.forEach(id => {
   const btn = document.getElementById(id); if (!btn) return;
   btn.addEventListener('click',    (e) => { e.preventDefault(); toggleRecording(); });
   btn.addEventListener('touchend', (e) => { e.preventDefault(); toggleRecording(); }, { passive: false });
 });
 
-// Style desktop du bouton PTT (réutilise la classe .ptt-btn-inner)
-(function addDesktopPttStyle() {
-  const s = document.createElement('style');
-  s.textContent = `
-    .ptt-btn-inner {
-      width:70px;height:70px;border-radius:50%;
-      border:2px solid var(--accent);background:transparent;color:var(--accent);
-      font-size:26px;cursor:pointer;display:flex;align-items:center;justify-content:center;
-      user-select:none;-webkit-user-select:none;transition:all 0.15s;
-      -webkit-tap-highlight-color:transparent;
-    }
-    .ptt-btn-inner.active {
-      border-color:var(--red);color:var(--red);
-      background:rgba(248,81,73,0.12);
-      box-shadow:0 0 20px rgba(248,81,73,0.35);
-      animation:pulse 1s infinite;
-    }
-    .voice-status-inner { font-size:11px;color:var(--muted);letter-spacing:0.04em;text-align:center; }
-  `;
-  document.head.appendChild(s);
-})();
-
-// ─── Mode simulation ──────────────────────────────────────────────────────────
+// ── Mode simulation ──────────────────────────────────────────────────────────
 function toggleSim() {
   simMode = !simMode;
-  document.getElementById('sim-btn').classList.toggle('active', simMode);
+  const item = document.getElementById('sim-item');
+  if (item) item.classList.toggle('active', simMode);
   if (simMode) {
     if (sseSource) { sseSource.close(); sseSource = null; }
     setDot('dot-sse','warn'); setDot('dot-ws','warn'); setDot('dot-ai','warn');
     document.getElementById('mode-badge').textContent = 'SIM';
-    addLog('system', 'Mode simulation activé');
+    addLog('system', 'Mode simulation active');
     startSimTelemetry();
   } else {
     stopSimTelemetry();
-    addLog('system', 'Mode simulation désactivé');
+    addLog('system', 'Mode simulation desactive');
     connectSSE();
   }
 }
@@ -1804,9 +2028,9 @@ function stopSimTelemetry() {
 }
 
 const SIM_RESPONSES = [
-  { transcript:'Avance à vitesse modérée', ai:'Bien reçu, j\'accélère doucement.', cmd:{action:'forward',intensity:0.4} },
+  { transcript:'Avance a vitesse moderee', ai:'Bien recu, j\'accelere doucement.', cmd:{action:'forward',intensity:0.4} },
   { transcript:'Freine maintenant',        ai:'Freinage en cours.',                cmd:{action:'brake',  intensity:0.8} },
-  { transcript:'Stop',                     ai:'Arrêt complet.',                    cmd:{action:'stop'} }
+  { transcript:'Stop',                     ai:'Arret complet.',                    cmd:{action:'stop'} }
 ];
 let simRespIdx = 0;
 
@@ -1814,21 +2038,26 @@ function simulateVoiceCmd() {
   const r = SIM_RESPONSES[simRespIdx++ % SIM_RESPONSES.length];
   setVoiceState(true);
   setTimeout(() => {
-    addLog('transcript', '🎤 ' + r.transcript);
+    addLog('transcript', r.transcript);
     setTimeout(() => {
-      appendAiDelta('🤖 ' + r.ai);
-      addLog('cmd', `⚡ [SIM] ${r.cmd.action.toUpperCase()}${r.cmd.intensity != null ? ' @ '+Math.round(r.cmd.intensity*100)+'%' : ''}`);
+      appendAiDelta(r.ai);
+      addLog('cmd', `[SIM] ${r.cmd.action.toUpperCase()}${r.cmd.intensity != null ? ' @ '+Math.round(r.cmd.intensity*100)+'%' : ''}`);
       setVoiceState(false);
     }, 800);
   }, 1200);
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
+// ── Init ─────────────────────────────────────────────────────────────────────
 function initApp() {
   initMap();
   connectSSE();
   setInterval(fetchStatus, 10000);
-  addLog('system', 'Interface initialisée');
+  addLog('system', 'Interface initialisee');
+  // Invalidate map after a short delay for proper sizing
+  setTimeout(() => {
+    if (map) map.invalidateSize();
+    if (mapDesktop) mapDesktop.invalidateSize();
+  }, 200);
 }
 </script>
 </body>

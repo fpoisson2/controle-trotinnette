@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LimoTrott — Trottinettes vocales en libre-service | Cégep Limoilou</title>
+<meta name="description" content="Des trottinettes électriques en libre-service contrôlées par la voix, exclusivement pour les étudiants et le personnel du Cégep Limoilou.">
+<meta name="keywords" content="trottinette, électrique, libre-service, Cégep Limoilou, campus, voix, Québec">
+<meta property="og:title" content="LimoTrott — Trottinettes vocales en libre-service">
+<meta property="og:description" content="Déplace-toi au campus par la voix. Trottinettes électriques gratuites pour la communauté du Cégep Limoilou.">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="fr_CA">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="LimoTrott — Trottinettes vocales en libre-service">
+<meta name="twitter:description" content="Déplace-toi au campus par la voix. Trottinettes électriques gratuites pour la communauté du Cégep Limoilou.">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --color-primary: #ed1e20;
+  --color-primary-dark: #343030;
+  --color-darkgrey: #121212;
+  --color-teal: #00f8ce;
+  --color-blue: #42f7fb;
+  --color-green: #bae562;
+  --color-yellow: #f6fd54;
+  --color-grey: #dcdcdc;
+  --color-bg: #ffffff;
+  --color-text: #121212;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--color-text);
+  background: var(--color-bg);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+
+.container {
+  max-width: 1140px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ---- NAV ---- */
+.nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: rgba(18, 18, 18, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  transition: box-shadow 0.3s;
+}
+.nav.scrolled { box-shadow: 0 2px 24px rgba(0,0,0,0.4); }
+.nav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+}
+.nav-logo {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.nav-logo-text {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.5px;
+}
+.nav-logo-sub {
+  font-size: 0.7rem;
+  color: rgba(255,255,255,0.45);
+  font-weight: 400;
+}
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  list-style: none;
+}
+.nav-links a {
+  font-size: 0.875rem;
+  color: rgba(255,255,255,0.7);
+  font-weight: 500;
+  transition: color 0.2s;
+}
+.nav-links a:hover { color: #fff; }
+.nav-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 22px;
+  background: var(--color-primary);
+  color: #fff !important;
+  border-radius: 9999px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  transition: background 0.2s;
+}
+.nav-cta:hover { background: #c9191b; }
+
+.hamburger {
+  display: none;
+  flex-direction: column;
+  gap: 5px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+}
+.hamburger span {
+  display: block;
+  width: 24px;
+  height: 2px;
+  background: #fff;
+  border-radius: 2px;
+  transition: transform 0.3s, opacity 0.3s;
+}
+.hamburger.active span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.hamburger.active span:nth-child(2) { opacity: 0; }
+.hamburger.active span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+@media (max-width: 768px) {
+  .hamburger { display: flex; }
+  .nav-links {
+    position: fixed;
+    top: 64px;
+    left: 0;
+    right: 0;
+    background: rgba(18,18,18,0.98);
+    flex-direction: column;
+    padding: 24px;
+    gap: 20px;
+    transform: translateY(-120%);
+    transition: transform 0.35s ease;
+  }
+  .nav-links.open { transform: translateY(0); }
+  .nav-links a { font-size: 1rem; }
+}
+
+/* ---- HERO ---- */
+.hero {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  background: linear-gradient(160deg, var(--color-darkgrey) 0%, var(--color-primary-dark) 100%);
+  overflow: hidden;
+}
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+.hero-content {
+  position: relative;
+  z-index: 2;
+  max-width: 640px;
+  padding-top: 80px;
+}
+.hero-eyebrow {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-teal);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: 16px;
+}
+.hero h1 {
+  font-size: clamp(2.2rem, 5vw, 3.6rem);
+  font-weight: 800;
+  color: #fff;
+  line-height: 1.1;
+  letter-spacing: -1px;
+  margin-bottom: 20px;
+}
+.hero-subtitle {
+  font-size: 1.15rem;
+  color: rgba(255,255,255,0.65);
+  margin-bottom: 36px;
+  max-width: 480px;
+}
+.hero-buttons { display: flex; gap: 14px; flex-wrap: wrap; }
+.btn-red {
+  display: inline-flex;
+  align-items: center;
+  padding: 14px 32px;
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: 9999px;
+  font-weight: 700;
+  font-size: 1rem;
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.2s;
+}
+.btn-red:hover { background: #c9191b; transform: translateY(-1px); }
+.btn-outline {
+  display: inline-flex;
+  align-items: center;
+  padding: 14px 32px;
+  background: transparent;
+  color: #fff;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-radius: 9999px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: border-color 0.2s, transform 0.2s;
+}
+.btn-outline:hover { border-color: rgba(255,255,255,0.6); transform: translateY(-1px); }
+
+/* Floating UI mockups */
+.hero-floats {
+  position: absolute;
+  right: 5%;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  width: 340px;
+}
+.float-card {
+  position: absolute;
+  background: rgba(255,255,255,0.07);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 16px;
+  padding: 14px 20px;
+  color: #fff;
+  white-space: nowrap;
+}
+.float-speed {
+  top: -60px;
+  right: 0;
+  animation: floatA 4s ease-in-out infinite;
+}
+.float-speed .val {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -1px;
+}
+.float-speed .unit {
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.5);
+  margin-left: 4px;
+}
+.float-battery {
+  top: 40px;
+  right: 160px;
+  animation: floatB 4.5s ease-in-out infinite;
+}
+.float-battery .val {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--color-green);
+}
+.float-battery .label {
+  font-size: 0.7rem;
+  color: rgba(255,255,255,0.4);
+  display: block;
+}
+.float-voice {
+  top: 130px;
+  right: 20px;
+  background: rgba(0, 248, 206, 0.1);
+  border-color: rgba(0, 248, 206, 0.25);
+  animation: floatC 5s ease-in-out infinite;
+}
+.float-voice .mic {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--color-teal);
+  border-radius: 50%;
+  margin-right: 8px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.float-voice .text {
+  font-size: 0.9rem;
+  font-style: italic;
+  color: var(--color-teal);
+}
+
+@keyframes floatA { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-12px); } }
+@keyframes floatB { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(10px); } }
+@keyframes floatC { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+@media (max-width: 768px) {
+  .hero-floats { display: none; }
+  .hero-content { padding-top: 100px; padding-bottom: 40px; }
+}
+
+/* ---- SECTION SHARED ---- */
+.section {
+  padding: 96px 0;
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.section.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.section-dark { background: var(--color-darkgrey); color: #fff; }
+.section-grey { background: #f5f5f5; }
+.section-title {
+  font-size: clamp(1.8rem, 3.5vw, 2.5rem);
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  margin-bottom: 12px;
+}
+.section-subtitle {
+  font-size: 1.05rem;
+  color: rgba(18,18,18,0.55);
+  margin-bottom: 56px;
+  max-width: 520px;
+}
+.section-dark .section-subtitle { color: rgba(255,255,255,0.45); }
+
+/* ---- STEPS ---- */
+.steps-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 32px;
+  position: relative;
+}
+.steps-grid::before {
+  content: "";
+  position: absolute;
+  top: 52px;
+  left: 10%;
+  right: 10%;
+  height: 3px;
+  background: linear-gradient(90deg, var(--color-teal), var(--color-blue));
+  border-radius: 3px;
+  z-index: 0;
+}
+.step-card {
+  position: relative;
+  z-index: 1;
+  background: #fff;
+  border-radius: 20px;
+  padding: 40px 24px 32px;
+  text-align: center;
+  box-shadow: 0 2px 20px rgba(0,0,0,0.05);
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+.step-card:hover { transform: translateY(-4px); box-shadow: 0 8px 30px rgba(0,0,0,0.1); }
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  background: var(--color-darkgrey);
+  color: var(--color-teal);
+  border-radius: 50%;
+  font-weight: 800;
+  font-size: 0.85rem;
+  margin-bottom: 20px;
+}
+.step-icon {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.step-icon svg { width: 48px; height: 48px; }
+.step-card h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.step-card p {
+  font-size: 0.88rem;
+  color: rgba(18,18,18,0.55);
+  line-height: 1.5;
+}
+
+@media (max-width: 768px) {
+  .steps-grid {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .steps-grid::before { display: none; }
+}
+
+/* ---- MAP ---- */
+.map-wrapper {
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+#campus-map { height: 420px; width: 100%; }
+.map-stats {
+  display: flex;
+  gap: 32px;
+  margin-top: 24px;
+  flex-wrap: wrap;
+}
+.map-stat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.map-stat-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.map-stat-dot.green { background: var(--color-green); }
+.map-stat-dot.yellow { background: var(--color-yellow); }
+.map-stat-dot.grey { background: #666; }
+.map-stat-label {
+  font-size: 0.9rem;
+  color: rgba(255,255,255,0.7);
+}
+.map-stat-label strong {
+  color: #fff;
+  font-weight: 700;
+}
+
+/* ---- PRICING ---- */
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 32px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+.pricing-card {
+  background: #fff;
+  border-radius: 20px;
+  padding: 40px 32px;
+  border: 2px solid var(--color-grey);
+  position: relative;
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+.pricing-card:hover { transform: translateY(-4px); box-shadow: 0 8px 30px rgba(0,0,0,0.08); }
+.pricing-card.featured { border-color: var(--color-teal); }
+.pricing-badge {
+  display: inline-block;
+  padding: 4px 14px;
+  background: var(--color-green);
+  color: var(--color-darkgrey);
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 16px;
+}
+.pricing-card h3 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.pricing-price {
+  font-size: 2.8rem;
+  font-weight: 800;
+  letter-spacing: -1px;
+  margin-bottom: 4px;
+}
+.pricing-price-note {
+  font-size: 0.85rem;
+  color: rgba(18,18,18,0.45);
+  margin-bottom: 24px;
+}
+.pricing-features {
+  list-style: none;
+  margin-bottom: 28px;
+}
+.pricing-features li {
+  padding: 8px 0;
+  font-size: 0.92rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pricing-features li::before {
+  content: "";
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  background: var(--color-teal);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='3'%3E%3Cpath d='M5 13l4 4L19 7'/%3E%3C/svg%3E") center/contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='3'%3E%3Cpath d='M5 13l4 4L19 7'/%3E%3C/svg%3E") center/contain no-repeat;
+}
+.pricing-card .btn-red { width: 100%; justify-content: center; }
+.pricing-card .pricing-note {
+  font-size: 0.78rem;
+  color: rgba(18,18,18,0.4);
+  text-align: center;
+  margin-top: 12px;
+}
+
+@media (max-width: 768px) {
+  .pricing-grid { grid-template-columns: 1fr; }
+}
+
+/* ---- SECURITY ---- */
+.security-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 32px;
+}
+.security-card {
+  background: #fff;
+  border-radius: 20px;
+  padding: 36px 28px;
+  box-shadow: 0 2px 20px rgba(0,0,0,0.05);
+  transition: transform 0.3s;
+}
+.security-card:hover { transform: translateY(-4px); }
+.security-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  background: rgba(0, 248, 206, 0.1);
+  border-radius: 14px;
+  margin-bottom: 20px;
+}
+.security-icon svg { width: 28px; height: 28px; }
+.security-card h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.security-card p {
+  font-size: 0.9rem;
+  color: rgba(18,18,18,0.55);
+  line-height: 1.6;
+}
+
+@media (max-width: 768px) {
+  .security-grid { grid-template-columns: 1fr; }
+}
+
+/* ---- FOOTER ---- */
+.footer {
+  background: var(--color-darkgrey);
+  color: rgba(255,255,255,0.5);
+  padding: 64px 0 32px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.footer-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 48px;
+  margin-bottom: 48px;
+}
+.footer-logo {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 8px;
+}
+.footer-tagline { font-size: 0.9rem; margin-bottom: 16px; }
+.footer h4 {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: rgba(255,255,255,0.7);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin-bottom: 16px;
+}
+.footer-links {
+  list-style: none;
+}
+.footer-links li { margin-bottom: 10px; }
+.footer-links a {
+  font-size: 0.88rem;
+  transition: color 0.2s;
+}
+.footer-links a:hover { color: var(--color-teal); }
+.footer-bottom {
+  border-top: 1px solid rgba(255,255,255,0.06);
+  padding-top: 24px;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 768px) {
+  .footer-grid { grid-template-columns: 1fr; gap: 32px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ====== NAV ====== -->
+<nav class="nav" id="nav">
+  <div class="container nav-inner">
+    <div class="nav-logo">
+      <span class="nav-logo-text">LimoTrott</span>
+      <span class="nav-logo-sub">Cégep Limoilou</span>
+    </div>
+    <ul class="nav-links" id="navLinks">
+      <li><a href="#comment-ca-marche">Comment ça marche</a></li>
+      <li><a href="#tarifs">Tarifs</a></li>
+      <li><a href="#carte">Carte</a></li>
+      <li><a href="#securite">Sécurité</a></li>
+      <li><a href="/dashboard" class="nav-cta">Se connecter</a></li>
+    </ul>
+    <button class="hamburger" id="hamburger" aria-label="Menu">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</nav>
+
+<!-- ====== HERO ====== -->
+<section class="hero">
+  <div class="container" style="display:flex;align-items:center;width:100%;position:relative;">
+    <div class="hero-content">
+      <span class="hero-eyebrow">Nouveau au campus</span>
+      <h1>Déplace-toi au campus. Par la voix.</h1>
+      <p class="hero-subtitle">Des trottinettes électriques en libre-service, contrôlées par la voix. Exclusif à la communauté du Cégep Limoilou.</p>
+      <div class="hero-buttons">
+        <a href="#tarifs" class="btn-red">Essaie gratuitement</a>
+        <a href="#carte" class="btn-outline">Voir la carte</a>
+      </div>
+    </div>
+    <div class="hero-floats">
+      <div class="float-card float-speed">
+        <span class="val">23</span><span class="unit">km/h</span>
+      </div>
+      <div class="float-card float-battery">
+        <span class="label">Batterie</span>
+        <span class="val">38 V</span>
+      </div>
+      <div class="float-card float-voice">
+        <span class="mic"></span>
+        <span class="text">"Avance doucement"</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== COMMENT ÇA MARCHE ====== -->
+<section class="section" id="comment-ca-marche">
+  <div class="container">
+    <div class="section-title">Comment ça marche</div>
+    <p class="section-subtitle">En quatre étapes, tu roules.</p>
+    <div class="steps-grid">
+      <div class="step-card">
+        <div class="step-num">01</div>
+        <div class="step-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="24" cy="16" r="8" stroke="#121212" stroke-width="2.5" fill="none"/>
+            <path d="M8 42c0-8.837 7.163-16 16-16s16 7.163 16 16" stroke="#121212" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+            <path d="M36 12v8m-4-4h8" stroke="#00f8ce" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>Crée ton compte</h3>
+        <p>Utilise ton courriel @cegeplimoilou.ca. Ça prend 30 secondes.</p>
+      </div>
+      <div class="step-card">
+        <div class="step-num">02</div>
+        <div class="step-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="8" y="8" width="32" height="32" rx="4" stroke="#121212" stroke-width="2.5" fill="none"/>
+            <rect x="14" y="14" width="6" height="6" rx="1" fill="#121212"/>
+            <rect x="22" y="14" width="6" height="6" rx="1" fill="#121212"/>
+            <rect x="28" y="14" width="6" height="6" rx="1" fill="#00f8ce"/>
+            <rect x="14" y="22" width="6" height="6" rx="1" fill="#121212"/>
+            <rect x="22" y="22" width="6" height="6" rx="1" fill="#00f8ce"/>
+            <rect x="28" y="22" width="6" height="6" rx="1" fill="#121212"/>
+            <rect x="14" y="28" width="6" height="6" rx="1" fill="#00f8ce"/>
+            <rect x="22" y="28" width="6" height="6" rx="1" fill="#121212"/>
+            <rect x="28" y="28" width="6" height="6" rx="1" fill="#121212"/>
+          </svg>
+        </div>
+        <h3>Scanne et débarque</h3>
+        <p>Scanne le code QR sur la trottinette pour la débloquer.</p>
+      </div>
+      <div class="step-card">
+        <div class="step-num">03</div>
+        <div class="step-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="18" y="6" width="12" height="20" rx="6" stroke="#121212" stroke-width="2.5" fill="none"/>
+            <line x1="24" y1="26" x2="24" y2="34" stroke="#121212" stroke-width="2.5" stroke-linecap="round"/>
+            <path d="M16 34h16" stroke="#121212" stroke-width="2.5" stroke-linecap="round"/>
+            <path d="M12 20c0 6.627 5.373 12 12 12s12-5.373 12-12" stroke="#00f8ce" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+            <circle cx="38" cy="10" r="3" fill="#ed1e20"/>
+            <circle cx="38" cy="10" r="6" fill="none" stroke="#ed1e20" stroke-width="1.5" opacity="0.3"/>
+          </svg>
+        </div>
+        <h3>Parle, roule</h3>
+        <p>Dis "avance", "ralentis", ou utilise la manette. Toi qui choisis.</p>
+      </div>
+      <div class="step-card">
+        <div class="step-num">04</div>
+        <div class="step-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="14" y="20" width="20" height="18" rx="3" stroke="#121212" stroke-width="2.5" fill="none"/>
+            <path d="M18 20v-6a6 6 0 0 1 12 0v6" stroke="#121212" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+            <circle cx="24" cy="30" r="3" fill="#00f8ce"/>
+            <line x1="24" y1="33" x2="24" y2="35" stroke="#00f8ce" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>Stationne et verrouille</h3>
+        <p>Dépose-la dans une zone désignée. Le verrouillage est automatique.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== CARTE ====== -->
+<section class="section section-dark" id="carte">
+  <div class="container">
+    <div class="section-title" style="color:#fff;">Trouve une trottinette</div>
+    <p class="section-subtitle">Disponibilité en temps réel sur le campus.</p>
+    <div class="map-wrapper">
+      <div id="campus-map"></div>
+    </div>
+    <div class="map-stats">
+      <div class="map-stat">
+        <div class="map-stat-dot green"></div>
+        <span class="map-stat-label"><strong>8</strong> disponibles</span>
+      </div>
+      <div class="map-stat">
+        <div class="map-stat-dot yellow"></div>
+        <span class="map-stat-label"><strong>2</strong> en course</span>
+      </div>
+      <div class="map-stat">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="4" fill="rgba(255,255,255,0.2)"/><circle cx="8" cy="8" r="7" stroke="rgba(255,255,255,0.15)" stroke-width="1.5" fill="none"/></svg>
+        <span class="map-stat-label">Campus Charlesbourg</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== TARIFS ====== -->
+<section class="section section-grey" id="tarifs">
+  <div class="container" style="text-align:center;">
+    <div class="section-title">Tarifs</div>
+    <p class="section-subtitle" style="margin-left:auto;margin-right:auto;">Simple et transparent. Gratuit pour la communauté du cégep.</p>
+    <div class="pricing-grid">
+      <div class="pricing-card featured">
+        <span class="pricing-badge">Gratuit</span>
+        <h3>Étudiants et personnel</h3>
+        <div class="pricing-price">0$</div>
+        <div class="pricing-price-note">par trajet</div>
+        <ul class="pricing-features">
+          <li>Trajets illimités</li>
+          <li>Contrôle vocal intelligent</li>
+          <li>Casque prêté gratuitement</li>
+          <li>Support prioritaire</li>
+        </ul>
+        <a href="#" class="btn-red">Inscris-toi gratuitement</a>
+        <p class="pricing-note">Inscription avec courriel @cegeplimoilou.ca</p>
+      </div>
+      <div class="pricing-card">
+        <h3>Visiteurs</h3>
+        <div class="pricing-price">2$</div>
+        <div class="pricing-price-note">par trajet (max. 30 min)</div>
+        <ul class="pricing-features">
+          <li>Accès aux trottinettes disponibles</li>
+          <li>Contrôle vocal intelligent</li>
+          <li>Paiement par carte de crédit</li>
+        </ul>
+        <a href="#" class="btn-red" style="background:var(--color-primary-dark);">Commencer</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== SÉCURITÉ ====== -->
+<section class="section" id="securite">
+  <div class="container">
+    <div class="section-title">Ta sécurité, notre priorité</div>
+    <p class="section-subtitle">Chaque trajet est encadré par des systèmes intelligents.</p>
+    <div class="security-grid">
+      <div class="security-card">
+        <div class="security-icon">
+          <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M14 3C8.477 3 4 7.477 4 13v2c0 1.657 1.343 3 3 3h1v-7a6 6 0 1 1 12 0v7h1c1.657 0 3-1.343 3-3v-2c0-5.523-4.477-10-10-10z" stroke="#00f8ce" stroke-width="2" fill="none"/>
+            <rect x="10" y="18" width="8" height="6" rx="2" stroke="#00f8ce" stroke-width="2" fill="none"/>
+            <path d="M11 11v5m6-5v5" stroke="#00f8ce" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>Contrôle vocal intelligent</h3>
+        <p>La trottinette ralentit automatiquement dans les zones piétonnes. L'IA adapte la vitesse au contexte.</p>
+      </div>
+      <div class="security-card">
+        <div class="security-icon">
+          <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="14" cy="10" r="6" stroke="#00f8ce" stroke-width="2" fill="none"/>
+            <path d="M14 4v2m0 8v2" stroke="#00f8ce" stroke-width="2" stroke-linecap="round"/>
+            <path d="M8.5 18.5C6 20 4.5 22.5 4.5 25h19c0-2.5-1.5-5-4-6.5" stroke="#00f8ce" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M10 24l2-3h4l2 3" stroke="#00f8ce" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <h3>Casque obligatoire</h3>
+        <p>Un casque est prêté gratuitement à chaque station. Pas de casque, pas de départ.</p>
+      </div>
+      <div class="security-card">
+        <div class="security-icon">
+          <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="14" cy="14" r="10" stroke="#00f8ce" stroke-width="2" fill="none"/>
+            <path d="M14 8v6l4 3" stroke="#00f8ce" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M6 22l-2 2m18-2l2 2" stroke="#00f8ce" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>Vitesse limitée</h3>
+        <p>Maximum 20 km/h en zone libre, 10 km/h dans les zones achalandées. Toujours sous contrôle.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== FOOTER ====== -->
+<footer class="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div>
+        <div class="footer-logo">LimoTrott</div>
+        <p class="footer-tagline">Mobilité verte pour le campus</p>
+        <p style="font-size:0.82rem;">Trottinettes électriques intelligentes en libre-service, propulsées par la reconnaissance vocale.</p>
+      </div>
+      <div>
+        <h4>Navigation</h4>
+        <ul class="footer-links">
+          <li><a href="#comment-ca-marche">Comment ça marche</a></li>
+          <li><a href="#tarifs">Tarifs</a></li>
+          <li><a href="#carte">Carte en direct</a></li>
+          <li><a href="#securite">Sécurité</a></li>
+          <li><a href="/dashboard">Tableau de bord</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <ul class="footer-links">
+          <li>Cégep Limoilou</li>
+          <li>Campus Charlesbourg</li>
+          <li>7600, 3e Avenue Est</li>
+          <li>Québec (Québec)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>Fait avec passion à Québec — Propulsé par ESP32 + OpenAI</span>
+      <span>&copy; 2026 LimoTrott. Tous droits réservés.</span>
+    </div>
+  </div>
+</footer>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function() {
+  "use strict";
+
+  /* ---- NAV scroll shadow ---- */
+  var nav = document.getElementById("nav");
+  window.addEventListener("scroll", function() {
+    nav.classList.toggle("scrolled", window.scrollY > 10);
+  });
+
+  /* ---- Hamburger ---- */
+  var hamburger = document.getElementById("hamburger");
+  var navLinks = document.getElementById("navLinks");
+  hamburger.addEventListener("click", function() {
+    hamburger.classList.toggle("active");
+    navLinks.classList.toggle("open");
+  });
+  navLinks.querySelectorAll("a").forEach(function(a) {
+    a.addEventListener("click", function() {
+      hamburger.classList.remove("active");
+      navLinks.classList.remove("open");
+    });
+  });
+
+  /* ---- Intersection Observer fade-in ---- */
+  var sections = document.querySelectorAll(".section");
+  var observer = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("visible");
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.12 });
+  sections.forEach(function(s) { observer.observe(s); });
+
+  /* ---- LEAFLET MAP ---- */
+  var map = L.map("campus-map", {
+    center: [46.8580, -71.3507],
+    zoom: 16,
+    zoomControl: false,
+    attributionControl: false
+  });
+  L.control.zoom({ position: "bottomright" }).addTo(map);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://carto.com/">CARTO</a>'
+  }).addTo(map);
+
+  function scooterIcon(color) {
+    return L.divIcon({
+      className: "",
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+      popupAnchor: [0, -16],
+      html: '<svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="14" cy="14" r="13" fill="' + color + '" fill-opacity="0.18" stroke="' + color + '" stroke-width="2"/>' +
+        '<circle cx="14" cy="14" r="5" fill="' + color + '"/>' +
+        '</svg>'
+    });
+  }
+
+  var scooters = [
+    { lat: 46.8587, lng: -71.3512, name: "LT-001", status: "Disponible",   color: "#bae562" },
+    { lat: 46.8575, lng: -71.3498, name: "LT-002", status: "Disponible",   color: "#bae562" },
+    { lat: 46.8582, lng: -71.3525, name: "LT-003", status: "En course",    color: "#f6fd54" },
+    { lat: 46.8591, lng: -71.3502, name: "LT-004", status: "Disponible",   color: "#bae562" },
+    { lat: 46.8569, lng: -71.3515, name: "LT-005", status: "Maintenance",  color: "#666666" },
+    { lat: 46.8578, lng: -71.3490, name: "LT-006", status: "En course",    color: "#f6fd54" }
+  ];
+
+  scooters.forEach(function(s) {
+    L.marker([s.lat, s.lng], { icon: scooterIcon(s.color) })
+      .addTo(map)
+      .bindPopup(
+        '<div style="font-family:ui-sans-serif,system-ui,sans-serif;padding:4px 0;">' +
+        '<strong style="font-size:1rem;">' + s.name + '</strong><br>' +
+        '<span style="font-size:0.85rem;color:#666;">' + s.status + '</span>' +
+        '</div>'
+      );
+  });
+})();
+</script>
+</body>
+</html>
