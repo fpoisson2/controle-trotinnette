@@ -451,42 +451,26 @@ static void taskCapture(void *) {
 
         if (otaMode) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
 
-        // ── I2S PTT-gated : start quand PTT enfoncé, stop quand relâché ──
-        {
-            static bool i2sRunning = false;
-            bool pttNow = voiceActive && !sleepIsI2SDisabled();
-
-            if (pttNow && !i2sRunning) {
-                audioStartI2S();
-                i2sRunning = true;
-                // Purger le premier chunk (bruit de démarrage)
-                uint8_t dummy[MIC_CHUNK_SAMPLES * 2];
-                audioCaptureChunk(dummy);
-            } else if (!pttNow && i2sRunning) {
-                // PTT relâché → envoyer le reste puis stopper I2S
-                if (pcmAccumLen > 0 && wsProxyConnected) {
+        // ── I2S toujours actif, envoi audio seulement quand PTT enfoncé ──
+        if (!sleepIsI2SDisabled()) {
+            size_t len = audioCaptureChunk(pcmBuf);  // toujours drainer le DMA
+            if (voiceActive && wsProxyConnected && len > 0) {
+                // Accumuler 4 chunks (128 ms) avant d'envoyer une frame WS
+                if (pcmAccumLen + len <= sizeof(pcmAccum)) {
+                    memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
+                    pcmAccumLen += len;
+                }
+                if (pcmAccumLen >= sizeof(pcmAccum)) {
                     wsProxy.sendBIN(pcmAccum, pcmAccumLen);
                     pcmAccumLen = 0;
                 }
-                audioStopI2S();
-                i2sRunning = false;
+            } else if (!voiceActive && pcmAccumLen > 0) {
+                // Envoyer le reste quand le bouton est relâché
+                wsProxy.sendBIN(pcmAccum, pcmAccumLen);
+                pcmAccumLen = 0;
             }
-
-            if (i2sRunning) {
-                size_t len = audioCaptureChunk(pcmBuf);
-                if (wsProxyConnected && len > 0) {
-                    if (pcmAccumLen + len <= sizeof(pcmAccum)) {
-                        memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
-                        pcmAccumLen += len;
-                    }
-                    if (pcmAccumLen >= sizeof(pcmAccum)) {
-                        wsProxy.sendBIN(pcmAccum, pcmAccumLen);
-                        pcmAccumLen = 0;
-                    }
-                }
-            } else {
-                vTaskDelay(pdMS_TO_TICKS(50));
-            }
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(50));  // Économiser le CPU en mode veille
         }
 #endif
     }
@@ -736,12 +720,7 @@ void setup() {
     wsLog("[esc] Flipsky UART initialisé");
 
     esp_err_t e = audioInitI2S();
-    if (e == ESP_OK) {
-        audioStopI2S();  // I2S prêt mais en pause — démarré quand PTT enfoncé
-        wsLog("[i2s] OK (en pause, PTT-gated)");
-    } else {
-        wsLog("[i2s] ERREUR init");
-    }
+    wsLog("[i2s] %s\n", e == ESP_OK ? "OK" : "ERREUR");
 
     audioInitDAC();
     wsLog("[dac] timer OK");

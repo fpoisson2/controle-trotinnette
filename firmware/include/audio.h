@@ -133,17 +133,34 @@ inline void audioInitDAC() {
 inline void audioStopI2S()  { i2s_stop(I2S_NUM_0); }
 inline void audioStartI2S() { i2s_start(I2S_NUM_0); }
 
-// ── Capturer un chunk I2S et encoder en PCM16 little-endian ─────────────────
+// ── Capturer un chunk I2S, filtrer et encoder en PCM16 little-endian ────────
+// Filtre passe-haut IIR 1er ordre (~50 Hz cutoff à 16 kHz) :
+//   y[n] = α × (y[n-1] + x[n] - x[n-1])   avec α ≈ 0.98
+// Supprime le DC offset du MEMS et le bruit basse fréquence.
+//
 // pcmOut : buffer de sortie (MIC_CHUNK_SAMPLES * 2 bytes minimum)
 // Retourne le nombre de bytes écrits
 inline size_t audioCaptureChunk(uint8_t *pcmOut) {
     static int32_t raw[MIC_CHUNK_SAMPLES];
+    // État du filtre passe-haut (persistant entre les appels)
+    static float hpPrev = 0.0f;   // y[n-1]
+    static float hpPrevX = 0.0f;  // x[n-1]
+    const float alpha = 0.98f;
+
     size_t bytesRead = 0;
     i2s_read(I2S_NUM_0, raw, sizeof(raw), &bytesRead, pdMS_TO_TICKS(100));
     const size_t n = bytesRead / sizeof(int32_t);
     for (size_t i = 0; i < n; i++) {
-        // SPH0645 / ICS-43434 : données en bits [31:14], >> 16 → PCM16 + gain logiciel
-        int32_t amp = (raw[i] >> 16) * MIC_GAIN;
+        // SPH0645 / ICS-43434 : données en bits [31:14], >> 16 → PCM16
+        float x = (float)(raw[i] >> 16);
+
+        // Filtre passe-haut IIR
+        float y = alpha * (hpPrev + x - hpPrevX);
+        hpPrevX = x;
+        hpPrev  = y;
+
+        // Gain logiciel
+        int32_t amp = (int32_t)(y * MIC_GAIN);
         if (amp >  32767) amp =  32767;
         if (amp < -32768) amp = -32768;
         int16_t s = (int16_t)amp;
