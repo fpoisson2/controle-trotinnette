@@ -152,22 +152,22 @@ static void wifiBegin() {
 // Connexion bloquante au boot uniquement
 static void connectWiFi() {
 #if WIFI_ENTERPRISE
-    wsLog("[wifi] mode WPA2-Enterprise (EAP-PEAP)...");
+    Serial.println("[wifi] mode WPA2-Enterprise (EAP-PEAP)...");
 #else
-    wsLog("[wifi] mode WPA2 personnel...");
+    Serial.println("[wifi] mode WPA2 personnel...");
 #endif
     wifiBegin();
 
     uint32_t t = millis();
     while (WiFi.status() != WL_CONNECTED) {
         if (millis() - t > 30000) {
-            wsLog("[wifi] timeout — reboot");
+            Serial.println("[wifi] timeout — reboot");
             ESP.restart();
         }
         delay(500);
-        wsLog(".");
+        Serial.print(".");
     }
-    wsLog("\n[wifi] connecté : %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("\n[wifi] connecté : %s\n", WiFi.localIP().toString().c_str());
 
     if (MDNS.begin("trotilou")) {
         MDNS.addService("ws", "tcp", WS_SERVER_PORT);
@@ -202,6 +202,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
         case WStype_CONNECTED: {
             wsProxyConnected = true;
             lastWifiActivity = millis();
+            Serial.println("[ws-proxy] connecté à " PROXY_HOST);
             wsLog("[ws-proxy] connecté");
             // Envoyer la version firmware + MAC au proxy
             {
@@ -217,6 +218,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
 
         case WStype_DISCONNECTED:
             wsProxyConnected = false;
+            Serial.println("[ws-proxy] déconnecté — reconnexion auto");
             wsLog("[ws-proxy] déconnecté — reconnexion auto");
             break;
 
@@ -383,7 +385,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
 //  Gère aussi wsProxy (loop + send) — tout sur Core 1 pour éviter les races
 // ─────────────────────────────────────────────────────────────────────────────
 static uint8_t pcmBuf[MIC_CHUNK_SAMPLES * 2];
-static uint8_t pcmAccum[MIC_CHUNK_SAMPLES * 2 * 4];  // 4 chunks = 128 ms
+static uint8_t pcmAccum[MIC_CHUNK_SAMPLES * 2 * 2];  // 2 chunks = 64 ms
 static size_t  pcmAccumLen = 0;
 
 static void taskCapture(void *) {
@@ -452,21 +454,38 @@ static void taskCapture(void *) {
         if (otaMode) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
 
         // ── I2S toujours actif, envoi audio seulement quand PTT enfoncé ──
+        // Audio envoyé en JSON base64 (les frames binaires passent mal via Cloudflare tunnel)
         if (!sleepIsI2SDisabled()) {
             size_t len = audioCaptureChunk(pcmBuf);  // toujours drainer le DMA
             if (voiceActive && wsProxyConnected && len > 0) {
-                // Accumuler 4 chunks (128 ms) avant d'envoyer une frame WS
+                // Accumuler 2 chunks (64 ms) avant d'envoyer une frame WS
                 if (pcmAccumLen + len <= sizeof(pcmAccum)) {
                     memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
                     pcmAccumLen += len;
                 }
                 if (pcmAccumLen >= sizeof(pcmAccum)) {
-                    wsProxy.sendBIN(pcmAccum, pcmAccumLen);
+                    // Encoder en base64 et envoyer comme JSON texte
+                    static char b64Buf[4096];  // 2048 bytes PCM → ~2732 chars base64
+                    size_t b64Len = 0;
+                    mbedtls_base64_encode((unsigned char*)b64Buf, sizeof(b64Buf), &b64Len,
+                                          pcmAccum, pcmAccumLen);
+                    // JSON : {"type":"audio_in","data":"<base64>"}
+                    static char jsonBuf[4300];
+                    int jLen = snprintf(jsonBuf, sizeof(jsonBuf),
+                        "{\"type\":\"audio_in\",\"data\":\"%.*s\"}", (int)b64Len, b64Buf);
+                    wsProxy.sendTXT(jsonBuf, jLen);
                     pcmAccumLen = 0;
                 }
             } else if (!voiceActive && pcmAccumLen > 0) {
-                // Envoyer le reste quand le bouton est relâché
-                wsProxy.sendBIN(pcmAccum, pcmAccumLen);
+                // Flush le reste en base64
+                static char b64Buf[4096];
+                size_t b64Len = 0;
+                mbedtls_base64_encode((unsigned char*)b64Buf, sizeof(b64Buf), &b64Len,
+                                      pcmAccum, pcmAccumLen);
+                static char jsonBuf[4300];
+                int jLen = snprintf(jsonBuf, sizeof(jsonBuf),
+                    "{\"type\":\"audio_in\",\"data\":\"%.*s\"}", (int)b64Len, b64Buf);
+                wsProxy.sendTXT(jsonBuf, jLen);
                 pcmAccumLen = 0;
             }
         } else {
@@ -664,6 +683,8 @@ void setup() {
     // Initialiser le compteur d'inactivité
     sleepResetActivity();
 
+    Serial.begin(115200);
+    Serial.println("\n=== Trottinette Intelligente — ESP32 ===");
     wsLog("\n=== Trottinette Intelligente — ESP32 ===");
 
     // ── I2C pour l'écran OLED (SDA=21, SCL=22) ──────────────────────────────
@@ -696,11 +717,13 @@ void setup() {
         if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
             wifiLost    = true;
             wifiRetryAt = 0;  // retry immédiat
+            audioBeepWifiLost();
             wsLog("[wifi] déconnecté (event)");
         } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
             wifiLost       = false;
             wifiRetryDelay = 2000;
             wifiRetryCount = 0;
+            audioBeepWifiOk();
             lastWifiActivity = millis();
             wsLog("[wifi] reconnecté : %s\n", WiFi.localIP().toString().c_str());
             // Ré-enregistrer mDNS après reconnexion
@@ -798,14 +821,20 @@ void loop() {
 
 
     // ── Gear-R = push-to-talk : tenir = micro actif, relâcher = inactif ────────
-    // Anti-rebond 80 ms : filtre les pulses RTS du chip USB-série sur GPIO0
+    // Anti-rebond 300 ms : filtre les pulses RTS du chip USB-série sur GPIO2
     {
         static bool     pttState   = false;
         static bool     pttRaw     = false;
         static uint32_t pttChanged = 0;
         bool now = (digitalRead(GEAR_R_PIN) == LOW);
         if (now != pttRaw) { pttRaw = now; pttChanged = millis(); }
-        if (millis() - pttChanged >= 300) pttState = pttRaw;
+        if (millis() - pttChanged >= 300) {
+            if (pttRaw != pttState) {
+                pttState = pttRaw;
+                if (pttState) audioBeepPttOn();   // bip aigu : micro actif
+                else          audioBeepPttOff();  // bip grave : micro coupé
+            }
+        }
         voiceActive = pttState;
     }
 

@@ -1322,6 +1322,24 @@ esp32Wss.on('connection', (ws) => {
           // Notifier le dashboard
           broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
 
+        } else if (msg.type === 'audio_in') {
+          // Audio PCM base64 depuis l'ESP32 (alternative aux frames binaires pour Cloudflare)
+          if (scooterId === selectedScooterId) {
+            if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+              openaiWs.send(JSON.stringify({
+                type: 'input_audio_buffer.append',
+                audio: msg.data
+              }));
+            }
+            // Relayer le PCM brut aux clients debug-audio
+            const pcmBuf = Buffer.from(msg.data, 'base64');
+            for (const c of debugAudioClients) {
+              if (c.readyState === WebSocket.OPEN) {
+                try { c.send(pcmBuf, { binary: true }); } catch (_) {}
+              }
+            }
+          }
+
         } else if (msg.type === 'telemetry') {
           const entry = scooters.get(scooterId);
           if (entry) {

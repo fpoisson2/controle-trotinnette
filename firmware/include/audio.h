@@ -170,6 +170,33 @@ inline size_t audioCaptureChunk(uint8_t *pcmOut) {
     return n * 2;
 }
 
+// ── Bip court via DAC (non-bloquant via ring buffer) ────────────────────────
+// Génère un bip synthétique directement dans le ring buffer DAC
+// freq: fréquence Hz, durMs: durée ms
+inline void audioBeep(float freq, uint32_t durMs) {
+    const uint32_t nSamples = (SPK_SAMPLE_RATE * durMs) / 1000;
+    const float step = freq * 2.0f * 3.14159f / (float)SPK_SAMPLE_RATE;
+    for (uint32_t i = 0; i < nSamples; i++) {
+        // Vérifier qu'il y a de la place dans le ring buffer
+        uint32_t next = (dacHead + 1) & DAC_RING_MASK;
+        if (next == dacTail) break;  // buffer plein, stop
+        // Onde carrée douce (sinusoïde écrêtée) pour un son net
+        float val = sinf(step * i);
+        uint8_t dac = (uint8_t)(128 + (int8_t)(val > 0 ? 90 : -90));
+        dacRing[dacHead] = dac;
+        dacHead = next;
+    }
+}
+
+// Bip PTT ON : note aiguë courte (880 Hz, 60 ms)
+inline void audioBeepPttOn()  { audioBeep(880.0f, 60); }
+// Bip PTT OFF : note grave courte (440 Hz, 60 ms)
+inline void audioBeepPttOff() { audioBeep(440.0f, 60); }
+// Bip WiFi connecté : double-bip grave montant (330→500 Hz) — distinct du PTT
+inline void audioBeepWifiOk()   { audioBeep(330.0f, 40); audioBeep(500.0f, 40); }
+// Bip WiFi déconnecté : double-bip grave descendant (500→220 Hz)
+inline void audioBeepWifiLost() { audioBeep(500.0f, 40); audioBeep(220.0f, 80); }
+
 // ── Décoder base64 et enqueue dans le ring buffer DAC ────────────────────────
 // Buffer statique : les chunks base64 font max 4096 chars → ~3072 bytes PCM
 static uint8_t b64DecodeBuf[4096];
