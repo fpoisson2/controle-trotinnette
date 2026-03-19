@@ -128,6 +128,11 @@ inline void audioInitDAC() {
     timerAlarmEnable(dacTimer);
 }
 
+// ── Pause / reprise I2S (PTT-gated) ────────────────────────────────────────
+// Plus fiable que install/uninstall répétés
+inline void audioStopI2S()  { i2s_stop(I2S_NUM_0); }
+inline void audioStartI2S() { i2s_start(I2S_NUM_0); }
+
 // ── Capturer un chunk I2S et encoder en PCM16 little-endian ─────────────────
 // pcmOut : buffer de sortie (MIC_CHUNK_SAMPLES * 2 bytes minimum)
 // Retourne le nombre de bytes écrits

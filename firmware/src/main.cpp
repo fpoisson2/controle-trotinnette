@@ -69,7 +69,7 @@ static volatile bool voiceActive = false;
 
 // ── Verrouillage à distance (libre-service) ──
 // Quand locked=true, le throttle est forcé au neutre (ESC ne répond pas)
-static volatile bool scooterLocked = true;  // verrouillée par défaut au boot
+static volatile bool scooterLocked = false;  // déverrouillée au boot (debug)
 
 // WebSocket serveur (télémétrie vers proxy)
 static WebSocketsServer wsServer(WS_SERVER_PORT);
@@ -245,16 +245,16 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 wsLog("[ota] début — %u bytes\n", (unsigned)fwSize);
                 otaTotal    = fwSize;
                 otaReceived = 0;
-                // Désactiver I2S pendant l'OTA pour libérer mémoire/DMA
-                i2s_driver_uninstall(I2S_NUM_0);
+                // Stopper I2S pendant l'OTA
+                audioStopI2S();
                 if (!Update.begin(fwSize)) {
                     wsLog("[ota] Update.begin() échoué");
                     char msg[128];
                     snprintf(msg, sizeof(msg),
                         "{\"type\":\"ota_result\",\"success\":false,\"error\":\"Update.begin échoué\"}");
                     wsProxy.sendTXT(msg);
-                    // Réinstaller I2S
-                    audioInitI2S();
+                    // Reprendre I2S (reste en pause, PTT le démarrera)
+
                 } else {
                     // Vérification d'intégrité MD5 si fourni par le proxy
                     const char* md5 = doc["md5"] | (const char*)nullptr;
@@ -451,26 +451,42 @@ static void taskCapture(void *) {
 
         if (otaMode) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
 
-        // Ne pas capturer l'audio si l'I2S est désactivé (mode veille légère)
-        if (!sleepIsI2SDisabled()) {
-            size_t len = audioCaptureChunk(pcmBuf);  // toujours lire l'I2S
-            if (voiceActive && wsProxyConnected && len > 0) {
-                // Accumuler 4 chunks (128 ms) avant d'envoyer une frame WS
-                if (pcmAccumLen + len <= sizeof(pcmAccum)) {
-                    memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
-                    pcmAccumLen += len;
-                }
-                if (pcmAccumLen >= sizeof(pcmAccum)) {
+        // ── I2S PTT-gated : start quand PTT enfoncé, stop quand relâché ──
+        {
+            static bool i2sRunning = false;
+            bool pttNow = voiceActive && !sleepIsI2SDisabled();
+
+            if (pttNow && !i2sRunning) {
+                audioStartI2S();
+                i2sRunning = true;
+                // Purger le premier chunk (bruit de démarrage)
+                uint8_t dummy[MIC_CHUNK_SAMPLES * 2];
+                audioCaptureChunk(dummy);
+            } else if (!pttNow && i2sRunning) {
+                // PTT relâché → envoyer le reste puis stopper I2S
+                if (pcmAccumLen > 0 && wsProxyConnected) {
                     wsProxy.sendBIN(pcmAccum, pcmAccumLen);
                     pcmAccumLen = 0;
                 }
-            } else if (!voiceActive && pcmAccumLen > 0) {
-                // Envoyer le reste quand le bouton est relâché
-                wsProxy.sendBIN(pcmAccum, pcmAccumLen);
-                pcmAccumLen = 0;
+                audioStopI2S();
+                i2sRunning = false;
             }
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(50));  // Économiser le CPU en mode veille
+
+            if (i2sRunning) {
+                size_t len = audioCaptureChunk(pcmBuf);
+                if (wsProxyConnected && len > 0) {
+                    if (pcmAccumLen + len <= sizeof(pcmAccum)) {
+                        memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
+                        pcmAccumLen += len;
+                    }
+                    if (pcmAccumLen >= sizeof(pcmAccum)) {
+                        wsProxy.sendBIN(pcmAccum, pcmAccumLen);
+                        pcmAccumLen = 0;
+                    }
+                }
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
         }
 #endif
     }
@@ -720,7 +736,12 @@ void setup() {
     wsLog("[esc] Flipsky UART initialisé");
 
     esp_err_t e = audioInitI2S();
-    wsLog("[i2s] %s\n", e == ESP_OK ? "OK" : "ERREUR");
+    if (e == ESP_OK) {
+        audioStopI2S();  // I2S prêt mais en pause — démarré quand PTT enfoncé
+        wsLog("[i2s] OK (en pause, PTT-gated)");
+    } else {
+        wsLog("[i2s] ERREUR init");
+    }
 
     audioInitDAC();
     wsLog("[dac] timer OK");
@@ -897,9 +918,9 @@ void loop() {
         wifiRetryDelay = min(wifiRetryDelay * 2, (uint32_t)30000);
     }
 
-    // ── Cmd 02H : contrôle + télémétrie toutes les 1000 ms (1 Hz) ───────────
+    // ── Cmd 02H : contrôle ESC à 20 Hz (50 ms) ──────────────────────────────
     static uint32_t lastControl = 0;
-    if (millis() - lastControl >= 1000) {
+    if (millis() - lastControl >= 50) {
         lastControl = millis();
 #if !FAKE_TELEMETRY
         // Attendre 3s après le boot pour laisser l'ESC finir son initialisation
