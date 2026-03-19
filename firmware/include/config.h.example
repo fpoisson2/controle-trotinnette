@@ -16,7 +16,7 @@
 
 // ── Proxy ─────────────────────────────────────────────────────────────────────
 // Connexion HTTPS via tunnel Cloudflare (port 443)
-#define PROXY_HOST       "trotilou.ca"
+#define PROXY_HOST       "www.trotilou.ca"
 #define PROXY_PORT       443
 
 // ── WebSocket serveur (le proxy se connecte ici pour envoyer les commandes) ───

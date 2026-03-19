@@ -3,16 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Trotilou — Trottinettes vocales en libre-service | Cégep Limoilou</title>
-<meta name="description" content="Des trottinettes électriques en libre-service contrôlées par la voix, exclusivement pour les étudiants et le personnel du Cégep Limoilou.">
-<meta name="keywords" content="trottinette, électrique, libre-service, Cégep Limoilou, campus, voix, Québec">
-<meta property="og:title" content="Trotilou — Trottinettes vocales en libre-service">
-<meta property="og:description" content="Déplace-toi au campus par la voix. Trottinettes électriques gratuites pour la communauté du Cégep Limoilou.">
+<title>Trotilou — Trottinettes intelligentes en libre-service | Cégep Limoilou</title>
+<meta name="description" content="Des trottinettes électriques intelligentes en libre-service, exclusivement pour les étudiants et le personnel du Cégep Limoilou.">
+<meta name="keywords" content="trottinette, électrique, libre-service, Cégep Limoilou, campus, intelligent, Québec, Trotilou">
+<meta property="og:title" content="Trotilou — Trottinettes intelligentes en libre-service">
+<meta property="og:description" content="Déplace-toi sur le campus en toute simplicité. Trottinettes électriques gratuites pour la communauté du Cégep Limoilou.">
 <meta property="og:type" content="website">
 <meta property="og:locale" content="fr_CA">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Trotilou — Trottinettes vocales en libre-service">
-<meta name="twitter:description" content="Déplace-toi au campus par la voix. Trottinettes électriques gratuites pour la communauté du Cégep Limoilou.">
+<meta name="twitter:title" content="Trotilou — Trottinettes intelligentes en libre-service">
+<meta name="twitter:description" content="Déplace-toi sur le campus en toute simplicité. Trottinettes électriques gratuites pour la communauté du Cégep Limoilou.">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -163,10 +163,9 @@ a { color: inherit; text-decoration: none; }
   content: "";
   position: absolute;
   inset: 0;
-  background-image:
-    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
-  background-size: 60px 60px;
+  background:
+    linear-gradient(180deg, rgba(18,18,18,0.55) 0%, rgba(18,18,18,0.75) 100%),
+    url('https://images.pexels.com/photos/13344135/pexels-photo-13344135.jpeg?auto=compress&cs=tinysrgb&w=1920') center/cover no-repeat;
 }
 .hero-content {
   position: relative;
@@ -636,8 +635,8 @@ a { color: inherit; text-decoration: none; }
   <div class="container" style="display:flex;align-items:center;width:100%;position:relative;">
     <div class="hero-content">
       <span class="hero-eyebrow">Nouveau au campus</span>
-      <h1>Déplace-toi au campus. Par la voix.</h1>
-      <p class="hero-subtitle">Des trottinettes électriques en libre-service, contrôlées par la voix. Exclusif à la communauté du Cégep Limoilou.</p>
+      <h1>Déplace-toi sur le campus. Simplement.</h1>
+      <p class="hero-subtitle">Des trottinettes électriques intelligentes en libre-service. Scanne, embarque, roule. Exclusif à la communauté du Cégep Limoilou.</p>
       <div class="hero-buttons">
         <a href="#tarifs" class="btn-red">Essaie gratuitement</a>
         <a href="#carte" class="btn-outline">Voir la carte</a>
@@ -653,7 +652,7 @@ a { color: inherit; text-decoration: none; }
       </div>
       <div class="float-card float-voice">
         <span class="mic"></span>
-        <span class="text">"Avance doucement"</span>
+        <span class="text">En course...</span>
       </div>
     </div>
   </div>
@@ -709,7 +708,7 @@ a { color: inherit; text-decoration: none; }
           </svg>
         </div>
         <h3>Parle, roule</h3>
-        <p>Dis "avance", "ralentis", ou utilise la manette. Toi qui choisis.</p>
+        <p>Utilise la manette ou parle à ta trottinette. Toi qui choisis.</p>
       </div>
       <div class="step-card">
         <div class="step-num">04</div>
@@ -766,7 +765,7 @@ a { color: inherit; text-decoration: none; }
         <div class="pricing-price-note">par trajet</div>
         <ul class="pricing-features">
           <li>Trajets illimités</li>
-          <li>Contrôle vocal intelligent</li>
+          <li>Conduite intelligente</li>
           <li>Casque prêté gratuitement</li>
           <li>Support prioritaire</li>
         </ul>
@@ -779,7 +778,7 @@ a { color: inherit; text-decoration: none; }
         <div class="pricing-price-note">par trajet (max. 30 min)</div>
         <ul class="pricing-features">
           <li>Accès aux trottinettes disponibles</li>
-          <li>Contrôle vocal intelligent</li>
+          <li>Conduite intelligente</li>
           <li>Paiement par carte de crédit</li>
         </ul>
         <a href="#" class="btn-red" style="background:var(--color-primary-dark);">Commencer</a>
@@ -802,8 +801,8 @@ a { color: inherit; text-decoration: none; }
             <path d="M11 11v5m6-5v5" stroke="#00f8ce" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
         </div>
-        <h3>Contrôle vocal intelligent</h3>
-        <p>La trottinette ralentit automatiquement dans les zones piétonnes. L'IA adapte la vitesse au contexte.</p>
+        <h3>Assistance intelligente</h3>
+        <p>La trottinette ralentit automatiquement dans les zones piétonnes. La vitesse s'adapte au contexte.</p>
       </div>
       <div class="security-card">
         <div class="security-icon">
@@ -839,7 +838,7 @@ a { color: inherit; text-decoration: none; }
       <div>
         <div class="footer-logo">Trotilou</div>
         <p class="footer-tagline">Mobilité verte pour le campus</p>
-        <p style="font-size:0.82rem;">Trottinettes électriques intelligentes en libre-service, propulsées par la reconnaissance vocale.</p>
+        <p style="font-size:0.82rem;">Trottinettes électriques intelligentes en libre-service, pour le campus du Cégep Limoilou.</p>
       </div>
       <div>
         <h4>Navigation</h4>
@@ -862,7 +861,7 @@ a { color: inherit; text-decoration: none; }
       </div>
     </div>
     <div class="footer-bottom">
-      <span>Fait avec passion à Québec — Propulsé par ESP32 + OpenAI</span>
+      <span>Fait avec passion à Québec</span>
       <span>&copy; 2026 Trotilou. Tous droits réservés.</span>
     </div>
   </div>
@@ -933,12 +932,12 @@ a { color: inherit; text-decoration: none; }
   }
 
   var scooters = [
-    { lat: 46.8587, lng: -71.3512, name: "LT-001", status: "Disponible",   color: "#bae562" },
-    { lat: 46.8575, lng: -71.3498, name: "LT-002", status: "Disponible",   color: "#bae562" },
-    { lat: 46.8582, lng: -71.3525, name: "LT-003", status: "En course",    color: "#f6fd54" },
-    { lat: 46.8591, lng: -71.3502, name: "LT-004", status: "Disponible",   color: "#bae562" },
-    { lat: 46.8569, lng: -71.3515, name: "LT-005", status: "Maintenance",  color: "#666666" },
-    { lat: 46.8578, lng: -71.3490, name: "LT-006", status: "En course",    color: "#f6fd54" }
+    { lat: 46.8587, lng: -71.3512, name: "TL-001", status: "Disponible",   color: "#bae562" },
+    { lat: 46.8575, lng: -71.3498, name: "TL-002", status: "Disponible",   color: "#bae562" },
+    { lat: 46.8582, lng: -71.3525, name: "TL-003", status: "En course",    color: "#f6fd54" },
+    { lat: 46.8591, lng: -71.3502, name: "TL-004", status: "Disponible",   color: "#bae562" },
+    { lat: 46.8569, lng: -71.3515, name: "TL-005", status: "Maintenance",  color: "#666666" },
+    { lat: 46.8578, lng: -71.3490, name: "TL-006", status: "En course",    color: "#f6fd54" }
   ];
 
   scooters.forEach(function(s) {

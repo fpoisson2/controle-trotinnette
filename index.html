@@ -353,7 +353,10 @@
   /* ── Login ── */
   #login-overlay {
     position: fixed; inset: 0; z-index: 1000;
-    background: var(--bg);
+    background:
+      linear-gradient(180deg, rgba(18,18,18,0.6) 0%, rgba(18,18,18,0.85) 100%),
+      url('https://images.pexels.com/photos/13344135/pexels-photo-13344135.jpeg?auto=compress&cs=tinysrgb&w=1920') center/cover no-repeat;
+    background-color: var(--bg);
     display: flex; align-items: center; justify-content: center;
     transition: opacity 0.3s;
     padding: 16px;
@@ -635,7 +638,7 @@
 <div id="login-overlay">
   <div class="login-card" id="login-card">
     <div class="login-title">Trotilou</div>
-    <div class="login-subtitle">Dashboard de controle</div>
+    <div class="login-subtitle">Dashboard de contrôle</div>
     <div class="login-fields">
       <input id="login-user" type="text" placeholder="Identifiant" autocomplete="username">
       <input id="login-pass" type="password" placeholder="Mot de passe" autocomplete="current-password">
