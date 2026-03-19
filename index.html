@@ -36,6 +36,26 @@
     --nav-h: 60px;
     --header-h: 52px;
   }
+  [data-theme="light"] {
+    --bg: #f0f0f0;
+    --surface: #ffffff;
+    --surface-raised: #e4e4e4;
+    --text: #121212;
+    --text-secondary: #343030;
+    --border: #ccc;
+    --muted: #555;
+    --accent: #00b8a0;
+    --accent-alt: #2ac8cc;
+    --speed: #00b8a0;
+    --battery: #6ea020;
+    --current: #a09800;
+    --green: #6ea020;
+    --yellow: #a09800;
+    --red: #d01a1c;
+    --danger: #d01a1c;
+    --ptt-idle: #00b8a0;
+    --ptt-active: #d01a1c;
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
   body {
@@ -93,6 +113,9 @@
   .hdr-btn:hover { border-color: var(--accent); color: var(--accent); }
   .hdr-btn.active { border-color: var(--yellow); color: var(--yellow); }
   .hdr-btn svg { width: 16px; height: 16px; }
+  .hdr-btn .icon-moon { display: none; }
+  [data-theme="light"] .hdr-btn .icon-sun { display: none; }
+  [data-theme="light"] .hdr-btn .icon-moon { display: block; }
 
   /* ── Desktop layout ── */
   .desktop-layout {
@@ -182,16 +205,18 @@
     50%     { box-shadow: 0 0 0 3px var(--green), 0 0 30px rgba(186,229,98,0.5); }
   }
   .lock-overlay {
-    position: absolute; inset: 0;
-    border-radius: 50%;
-    background: rgba(18,18,18,0.65);
-    display: flex; align-items: center; justify-content: center;
+    position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
+    background: var(--surface-raised); border: 1.5px solid var(--red);
+    border-radius: 20px; padding: 4px 10px;
+    display: flex; align-items: center; gap: 5px;
     z-index: 2;
     opacity: 0; pointer-events: none;
     transition: opacity 0.3s;
+    font-size: 11px; font-weight: 700; color: var(--red);
+    letter-spacing: 0.05em; text-transform: uppercase;
   }
   .lock-overlay.visible { opacity: 1; }
-  .lock-overlay svg { width: 56px; height: 56px; fill: var(--red); opacity: 0.8; }
+  .lock-overlay svg { width: 14px; height: 14px; fill: var(--red); }
 
   /* ── Telemetry pills ── */
   .telemetry-strip {
@@ -545,10 +570,10 @@
 
   /* ── Settings dropdown ── */
   .settings-dropdown {
-    position: absolute; top: var(--header-h); right: 10px;
+    position: fixed; top: var(--header-h); right: 10px;
     background: var(--surface-raised); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 6px;
-    z-index: 300; min-width: 140px;
+    z-index: 10000; min-width: 140px;
     display: none; flex-direction: column; gap: 2px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
   }
@@ -671,7 +696,11 @@
   </button>
   <button class="hdr-btn" id="ride-btn" onclick="toggleRide()" title="Demarrer/Terminer une course" style="display:none;font-size:11px">COURSE</button>
   <span id="ride-timer" style="font-size:11px;color:var(--green);display:none;font-weight:700"></span>
-  <span class="mode-badge" id="mode-badge">CLOUD</span>
+  <span class="mode-badge" id="mode-badge" style="display:none">CLOUD</span>
+  <button class="hdr-btn" id="theme-btn" onclick="toggleTheme()" title="Mode clair/sombre">
+    <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+    <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+  </button>
   <button class="hdr-btn" id="settings-btn" onclick="toggleSettings()" title="Parametres">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -699,6 +728,20 @@
   <button class="settings-item" id="monitor-item" onclick="toggleMonitor()">
     <span class="si-dot"></span> Monitor micro
   </button>
+  <button class="settings-item" id="users-item" onclick="toggleUsersModal()" style="display:none">
+    <span class="si-dot"></span> Utilisateurs
+  </button>
+</div>
+
+<!-- Users modal -->
+<div class="debug-modal" id="users-modal">
+  <div class="debug-inner" style="max-width:560px;height:auto;max-height:80vh">
+    <div class="debug-header">
+      <span>Gestion des utilisateurs</span>
+      <button class="close-btn" onclick="toggleUsersModal()">&times;</button>
+    </div>
+    <div id="users-list" style="padding:12px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:8px"></div>
+  </div>
 </div>
 
 <!-- ═══════════════════════════════════════
@@ -717,7 +760,7 @@
         </div>
       </div>
       <div class="lock-overlay" id="lock-overlay-desktop">
-        <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="currentColor"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="currentColor"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg>Verrouille
       </div>
     </div>
 
@@ -791,7 +834,7 @@
         </div>
       </div>
       <div class="lock-overlay" id="lock-overlay-mobile">
-        <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="currentColor"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" fill="currentColor"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg>Verrouille
       </div>
     </div>
     <div class="telemetry-strip">
@@ -919,6 +962,18 @@
 </div>
 
 <script>
+// ── Theme ────────────────────────────────────────────────────────────────────
+(function() {
+  var saved = localStorage.getItem('theme');
+  if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+})();
+function toggleTheme() {
+  var isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  document.documentElement.setAttribute('data-theme', isLight ? '' : 'light');
+  localStorage.setItem('theme', isLight ? 'dark' : 'light');
+  updateMapTiles();
+}
+
 // ── Detection mobile ─────────────────────────────────────────────────────────
 const isMobile = () => window.innerWidth <= 767;
 
@@ -1040,7 +1095,7 @@ let isRecording   = false;
 let audioQueue    = [];
 let isPlayingAudio= false;
 let map, mapDesktop;
-let lastPos = [46.8492, -71.3434];
+let lastPos = [46.8219, -71.2372];
 const scooterMarkers = new Map();
 let selectedScooterIdLocal = null;
 
@@ -1060,13 +1115,25 @@ function makeScooterIcon(color = '#00f8ce') {
 }
 
 const DARK_TILES = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const LIGHT_TILES = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+let tileLayerMobile, tileLayerDesktop;
+
+function getTilesUrl() {
+  return document.documentElement.getAttribute('data-theme') === 'light' ? LIGHT_TILES : DARK_TILES;
+}
+
+function updateMapTiles() {
+  const url = getTilesUrl();
+  if (tileLayerMobile) tileLayerMobile.setUrl(url);
+  if (tileLayerDesktop) tileLayerDesktop.setUrl(url);
+}
 
 function initMap() {
   map = L.map('map', { zoomControl: false }).setView(lastPos, 15);
-  L.tileLayer(DARK_TILES, { attribution: '&copy; CartoDB' }).addTo(map);
+  tileLayerMobile = L.tileLayer(getTilesUrl(), { attribution: '&copy; CartoDB' }).addTo(map);
 
   mapDesktop = L.map('map-desktop', { zoomControl: true }).setView(lastPos, 15);
-  L.tileLayer(DARK_TILES, { attribution: '&copy; CartoDB' }).addTo(mapDesktop);
+  tileLayerDesktop = L.tileLayer(getTilesUrl(), { attribution: '&copy; CartoDB' }).addTo(mapDesktop);
 }
 
 function updateScooterMarker(scooterId, lat, lon) {
@@ -1601,6 +1668,10 @@ function setVoiceState(recording) {
 async function startRecording() {
   if (simMode) { simulateVoiceCmd(); return; }
   try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      addLog('system', 'Microphone non disponible (HTTPS requis)');
+      return;
+    }
     if (!audioCtx) audioCtx = new AudioContext({ sampleRate: 16000 });
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
     const source = audioCtx.createMediaStreamSource(mediaStream);
@@ -2009,7 +2080,7 @@ function toggleSim() {
   }
 }
 
-let simLat = 46.8492, simLon = -71.3434, simAngle = 0;
+let simLat = 46.8219, simLon = -71.2372, simAngle = 0;
 
 function startSimTelemetry() {
   stopSimTelemetry();
@@ -2051,10 +2122,90 @@ function simulateVoiceCmd() {
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
+// ── Users modal ──────────────────────────────────────────────────────────────
+let currentUserRole = null;
+
+async function checkCurrentUserRole() {
+  try {
+    const r = await authFetch('/api/auth/me');
+    if (r.ok) {
+      const data = await r.json();
+      currentUserRole = data.role;
+      if (currentUserRole === 'admin') {
+        document.getElementById('users-item').style.display = '';
+      }
+    }
+  } catch (_) {}
+}
+
+function toggleUsersModal() {
+  const modal = document.getElementById('users-modal');
+  modal.classList.toggle('open');
+  if (modal.classList.contains('open')) loadUsers();
+  document.getElementById('settings-dropdown').classList.remove('open');
+}
+
+async function loadUsers() {
+  const list = document.getElementById('users-list');
+  list.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px">Chargement...</div>';
+  try {
+    const r = await authFetch('/api/users');
+    if (!r.ok) { list.innerHTML = '<div style="color:var(--red);padding:12px">Acces refuse</div>'; return; }
+    const users = await r.json();
+    list.innerHTML = '';
+    users.forEach(u => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:10px;';
+      const roleColor = u.role === 'admin' ? 'var(--red)' : u.role === 'manager' ? 'var(--yellow)' : 'var(--accent)';
+      const disabledBadge = u.disabled ? '<span style="font-size:10px;color:var(--red);font-weight:700;margin-left:4px">DESACTIVE</span>' : '';
+      row.innerHTML = `
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.display_name || u.email}${disabledBadge}</div>
+          <div style="font-size:11px;color:var(--muted)">${u.email}</div>
+        </div>
+        <select onchange="changeRole(${u.id},this.value)" style="background:var(--surface-raised);border:1px solid var(--border);color:${roleColor};border-radius:6px;padding:4px 8px;font-size:11px;font-weight:700;cursor:pointer">
+          <option value="user" ${u.role==='user'?'selected':''}>Utilisateur</option>
+          <option value="manager" ${u.role==='manager'?'selected':''}>Manager</option>
+          <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+        </select>
+        <button onclick="toggleDisableUser(${u.id},${u.disabled?0:1})" title="${u.disabled?'Reactiver':'Desactiver'}"
+          style="background:none;border:1px solid ${u.disabled?'var(--green)':'var(--red)'};color:${u.disabled?'var(--green)':'var(--red)'};border-radius:6px;padding:4px 8px;font-size:11px;font-weight:700;cursor:pointer">
+          ${u.disabled ? 'Activer' : 'Desactiver'}
+        </button>
+      `;
+      list.appendChild(row);
+    });
+  } catch (e) { list.innerHTML = '<div style="color:var(--red);padding:12px">Erreur: ' + e.message + '</div>'; }
+}
+
+async function changeRole(userId, newRole) {
+  try {
+    const r = await authFetch(`/api/users/${userId}/role`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: newRole })
+    });
+    if (!r.ok) { const d = await r.json(); alert(d.error || 'Erreur'); }
+    loadUsers();
+  } catch (e) { alert('Erreur: ' + e.message); }
+}
+
+async function toggleDisableUser(userId, disable) {
+  try {
+    const r = await authFetch(`/api/users/${userId}/disable`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ disabled: !!disable })
+    });
+    if (!r.ok) { const d = await r.json(); alert(d.error || 'Erreur'); }
+    loadUsers();
+  } catch (e) { alert('Erreur: ' + e.message); }
+}
+
 function initApp() {
   initMap();
+  fetchStatus();
   connectSSE();
-  setInterval(fetchStatus, 10000);
+  setInterval(fetchStatus, 5000);
+  checkCurrentUserRole();
   addLog('system', 'Interface initialisee');
   // Invalidate map after a short delay for proper sizing
   setTimeout(() => {

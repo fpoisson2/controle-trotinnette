@@ -1100,15 +1100,23 @@ async function buildAndStoreRelease(release) {
 }
 
 // Boucle de polling : vérifie les nouvelles releases et compile automatiquement
+const failedBuilds = new Set();
 async function pollAndBuild() {
   try {
     const latest = await fetchLatestRelease();
     if (!latest) return;
 
+    if (failedBuilds.has(latest.version)) return;
+
     const existing = getBuild(latest.version);
     if (!existing) {
       console.log(`[poll] nouvelle release détectée : v${latest.version} — lancement du build`);
-      await buildAndStoreRelease(latest);
+      try {
+        await buildAndStoreRelease(latest);
+      } catch (buildErr) {
+        failedBuilds.add(latest.version);
+        console.error(`[poll] build v${latest.version} échoué, ne sera pas retenté : ${buildErr.message}`);
+      }
     }
   } catch (err) {
     console.error('[poll] erreur :', err.message);

@@ -139,18 +139,18 @@ function registerScooter(mac, name, fwVersion) {
   const existing = db.prepare('SELECT id FROM scooters WHERE id = ?').get(mac);
   if (existing) {
     db.prepare(
-      'UPDATE scooters SET last_seen = datetime("now"), fw_version = COALESCE(?, fw_version), name = COALESCE(?, name) WHERE id = ?'
+      `UPDATE scooters SET last_seen = datetime('now'), fw_version = COALESCE(?, fw_version), name = COALESCE(?, name) WHERE id = ?`
     ).run(fwVersion || null, name || null, mac);
   } else {
     db.prepare(
-      'INSERT INTO scooters (id, name, fw_version, last_seen) VALUES (?, ?, ?, datetime("now"))'
+      `INSERT INTO scooters (id, name, fw_version, last_seen) VALUES (?, ?, ?, datetime('now'))`
     ).run(mac, name || mac, fwVersion || null);
   }
   return db.prepare('SELECT * FROM scooters WHERE id = ?').get(mac);
 }
 
 function updateScooterStatus(mac, status) {
-  db.prepare('UPDATE scooters SET status = ?, last_seen = datetime("now") WHERE id = ?').run(status, mac);
+  db.prepare(`UPDATE scooters SET status = ?, last_seen = datetime('now') WHERE id = ?`).run(status, mac);
 }
 
 function getScooterRegistry() {
@@ -160,14 +160,14 @@ function getScooterRegistry() {
 // ─── Courses (historique persistant) ───────────────────────────────────────────
 function createRide({ id, userId, scooterId, startLat, startLon }) {
   db.prepare(
-    'INSERT INTO rides (id, user_id, scooter_id, started_at, start_lat, start_lon) VALUES (?, ?, ?, datetime("now"), ?, ?)'
+    `INSERT INTO rides (id, user_id, scooter_id, started_at, start_lat, start_lon) VALUES (?, ?, ?, datetime('now'), ?, ?)`
   ).run(id, userId || null, scooterId, startLat || null, startLon || null);
   return db.prepare('SELECT * FROM rides WHERE id = ?').get(id);
 }
 
 function endRide(id, { endLat, endLon, distanceM, maxSpeed, avgSpeed } = {}) {
   db.prepare(
-    `UPDATE rides SET ended_at = datetime("now"),
+    `UPDATE rides SET ended_at = datetime('now'),
        end_lat = COALESCE(?, end_lat), end_lon = COALESCE(?, end_lon),
        distance_m = COALESCE(?, distance_m), max_speed = COALESCE(?, max_speed),
        avg_speed = COALESCE(?, avg_speed)

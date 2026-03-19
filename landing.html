@@ -28,6 +28,23 @@
   --color-grey: #dcdcdc;
   --color-bg: #ffffff;
   --color-text: #121212;
+  --color-card: #fff;
+  --color-card-shadow: rgba(0,0,0,0.05);
+  --color-subtitle: rgba(18,18,18,0.55);
+  --color-note: rgba(18,18,18,0.45);
+  --color-section-grey: #f5f5f5;
+  --color-card-border: #dcdcdc;
+}
+[data-theme="dark"] {
+  --color-bg: #121212;
+  --color-text: #f0f0f5;
+  --color-card: #1e1e1e;
+  --color-card-shadow: rgba(0,0,0,0.3);
+  --color-subtitle: rgba(255,255,255,0.5);
+  --color-note: rgba(255,255,255,0.4);
+  --color-section-grey: #1a1a1a;
+  --color-card-border: #343030;
+  --color-grey: #343030;
 }
 
 html { scroll-behavior: smooth; }
@@ -110,6 +127,19 @@ a { color: inherit; text-decoration: none; }
   transition: background 0.2s;
 }
 .nav-cta:hover { background: #c9191b; }
+
+.theme-toggle {
+  background: none; border: 1px solid rgba(255,255,255,0.2);
+  color: rgba(255,255,255,0.7); border-radius: 8px;
+  width: 36px; height: 36px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: border-color 0.2s, color 0.2s; flex-shrink: 0;
+}
+.theme-toggle:hover { border-color: rgba(255,255,255,0.5); color: #fff; }
+.theme-toggle svg { width: 18px; height: 18px; }
+.theme-toggle .icon-moon { display: none; }
+[data-theme="dark"] .theme-toggle .icon-sun { display: none; }
+[data-theme="dark"] .theme-toggle .icon-moon { display: block; }
 
 .hamburger {
   display: none;
@@ -320,7 +350,7 @@ a { color: inherit; text-decoration: none; }
   transform: translateY(0);
 }
 .section-dark { background: var(--color-darkgrey); color: #fff; }
-.section-grey { background: #f5f5f5; }
+.section-grey { background: var(--color-section-grey); }
 .section-title {
   font-size: clamp(1.8rem, 3.5vw, 2.5rem);
   font-weight: 800;
@@ -329,7 +359,7 @@ a { color: inherit; text-decoration: none; }
 }
 .section-subtitle {
   font-size: 1.05rem;
-  color: rgba(18,18,18,0.55);
+  color: var(--color-subtitle);
   margin-bottom: 56px;
   max-width: 520px;
 }
@@ -356,14 +386,14 @@ a { color: inherit; text-decoration: none; }
 .step-card {
   position: relative;
   z-index: 1;
-  background: #fff;
+  background: var(--color-card);
   border-radius: 20px;
   padding: 40px 24px 32px;
   text-align: center;
-  box-shadow: 0 2px 20px rgba(0,0,0,0.05);
+  box-shadow: 0 2px 20px var(--color-card-shadow);
   transition: transform 0.3s, box-shadow 0.3s;
 }
-.step-card:hover { transform: translateY(-4px); box-shadow: 0 8px 30px rgba(0,0,0,0.1); }
+.step-card:hover { transform: translateY(-4px); box-shadow: 0 8px 30px var(--color-card-shadow); }
 .step-num {
   display: inline-flex;
   align-items: center;
@@ -390,7 +420,7 @@ a { color: inherit; text-decoration: none; }
 }
 .step-card p {
   font-size: 0.88rem;
-  color: rgba(18,18,18,0.55);
+  color: var(--color-subtitle);
   line-height: 1.5;
 }
 
@@ -446,14 +476,16 @@ a { color: inherit; text-decoration: none; }
   margin: 0 auto;
 }
 .pricing-card {
-  background: #fff;
+  background: var(--color-card);
   border-radius: 20px;
   padding: 40px 32px;
-  border: 2px solid var(--color-grey);
+  border: 2px solid var(--color-card-border);
   position: relative;
   transition: transform 0.3s, box-shadow 0.3s;
+  display: flex;
+  flex-direction: column;
 }
-.pricing-card:hover { transform: translateY(-4px); box-shadow: 0 8px 30px rgba(0,0,0,0.08); }
+.pricing-card:hover { transform: translateY(-4px); box-shadow: 0 8px 30px var(--color-card-shadow); }
 .pricing-card.featured { border-color: var(--color-teal); }
 .pricing-badge {
   display: inline-block;
@@ -480,12 +512,13 @@ a { color: inherit; text-decoration: none; }
 }
 .pricing-price-note {
   font-size: 0.85rem;
-  color: rgba(18,18,18,0.45);
+  color: var(--color-note);
   margin-bottom: 24px;
 }
 .pricing-features {
   list-style: none;
   margin-bottom: 28px;
+  flex: 1;
 }
 .pricing-features li {
   padding: 8px 0;
@@ -507,7 +540,7 @@ a { color: inherit; text-decoration: none; }
 .pricing-card .btn-red { width: 100%; justify-content: center; }
 .pricing-card .pricing-note {
   font-size: 0.78rem;
-  color: rgba(18,18,18,0.4);
+  color: var(--color-note);
   text-align: center;
   margin-top: 12px;
 }
@@ -523,10 +556,10 @@ a { color: inherit; text-decoration: none; }
   gap: 32px;
 }
 .security-card {
-  background: #fff;
+  background: var(--color-card);
   border-radius: 20px;
   padding: 36px 28px;
-  box-shadow: 0 2px 20px rgba(0,0,0,0.05);
+  box-shadow: 0 2px 20px var(--color-card-shadow);
   transition: transform 0.3s;
 }
 .security-card:hover { transform: translateY(-4px); }
@@ -548,7 +581,7 @@ a { color: inherit; text-decoration: none; }
 }
 .security-card p {
   font-size: 0.9rem;
-  color: rgba(18,18,18,0.55);
+  color: var(--color-subtitle);
   line-height: 1.6;
 }
 
@@ -613,10 +646,10 @@ a { color: inherit; text-decoration: none; }
 <!-- ====== NAV ====== -->
 <nav class="nav" id="nav">
   <div class="container nav-inner">
-    <div class="nav-logo">
+    <a href="#" class="nav-logo" onclick="window.scrollTo({top:0,behavior:'smooth'});return false;">
       <span class="nav-logo-text">Trotilou</span>
       <span class="nav-logo-sub">Cégep Limoilou</span>
-    </div>
+    </a>
     <ul class="nav-links" id="navLinks">
       <li><a href="#comment-ca-marche">Comment ça marche</a></li>
       <li><a href="#tarifs">Tarifs</a></li>
@@ -624,6 +657,10 @@ a { color: inherit; text-decoration: none; }
       <li><a href="#securite">Sécurité</a></li>
       <li><a href="/dashboard" class="nav-cta">Se connecter</a></li>
     </ul>
+    <button class="theme-toggle" id="themeToggle" aria-label="Changer le theme" title="Mode clair/sombre">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
     <button class="hamburger" id="hamburger" aria-label="Menu">
       <span></span><span></span><span></span>
     </button>
@@ -634,8 +671,8 @@ a { color: inherit; text-decoration: none; }
 <section class="hero">
   <div class="container" style="display:flex;align-items:center;width:100%;position:relative;">
     <div class="hero-content">
-      <span class="hero-eyebrow">Nouveau au campus</span>
-      <h1>Déplace-toi sur le campus. Simplement.</h1>
+      <span class="hero-eyebrow">Nouveau</span>
+      <h1>Déplace-toi dans ton quartier. Simplement.</h1>
       <p class="hero-subtitle">Des trottinettes électriques intelligentes en libre-service. Scanne, embarque, roule. Exclusif à la communauté du Cégep Limoilou.</p>
       <div class="hero-buttons">
         <a href="#tarifs" class="btn-red">Essaie gratuitement</a>
@@ -708,7 +745,7 @@ a { color: inherit; text-decoration: none; }
           </svg>
         </div>
         <h3>Parle, roule</h3>
-        <p>Utilise la manette ou parle à ta trottinette. Toi qui choisis.</p>
+        <p>Contrôle toi-même ou parle à ta trottinette, c'est toi qui choisis.</p>
       </div>
       <div class="step-card">
         <div class="step-num">04</div>
@@ -744,10 +781,6 @@ a { color: inherit; text-decoration: none; }
         <div class="map-stat-dot yellow"></div>
         <span class="map-stat-label"><strong>2</strong> en course</span>
       </div>
-      <div class="map-stat">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="4" fill="rgba(255,255,255,0.2)"/><circle cx="8" cy="8" r="7" stroke="rgba(255,255,255,0.15)" stroke-width="1.5" fill="none"/></svg>
-        <span class="map-stat-label">Campus Charlesbourg</span>
-      </div>
     </div>
   </div>
 </section>
@@ -759,7 +792,6 @@ a { color: inherit; text-decoration: none; }
     <p class="section-subtitle" style="margin-left:auto;margin-right:auto;">Simple et transparent. Gratuit pour la communauté du cégep.</p>
     <div class="pricing-grid">
       <div class="pricing-card featured">
-        <span class="pricing-badge">Gratuit</span>
         <h3>Étudiants et personnel</h3>
         <div class="pricing-price">0$</div>
         <div class="pricing-price-note">par trajet</div>
@@ -770,7 +802,6 @@ a { color: inherit; text-decoration: none; }
           <li>Support prioritaire</li>
         </ul>
         <a href="#" class="btn-red">Inscris-toi gratuitement</a>
-        <p class="pricing-note">Inscription avec courriel @cegeplimoilou.ca</p>
       </div>
       <div class="pricing-card">
         <h3>Visiteurs</h3>
@@ -854,7 +885,6 @@ a { color: inherit; text-decoration: none; }
         <h4>Contact</h4>
         <ul class="footer-links">
           <li>Cégep Limoilou</li>
-          <li>Campus Charlesbourg</li>
           <li>7600, 3e Avenue Est</li>
           <li>Québec (Québec)</li>
         </ul>
@@ -872,6 +902,22 @@ a { color: inherit; text-decoration: none; }
 <script>
 (function() {
   "use strict";
+
+  /* ---- Theme toggle ---- */
+  var saved = localStorage.getItem("theme");
+  if (saved === "dark" || (!saved && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+    document.documentElement.setAttribute("data-theme", "dark");
+  }
+  document.getElementById("themeToggle").addEventListener("click", function() {
+    var isDark = document.documentElement.getAttribute("data-theme") === "dark";
+    document.documentElement.setAttribute("data-theme", isDark ? "light" : "dark");
+    localStorage.setItem("theme", isDark ? "light" : "dark");
+    if (typeof mapTileLayer !== "undefined" && mapTileLayer) {
+      mapTileLayer.setUrl(isDark
+        ? "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+        : "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png");
+    }
+  });
 
   /* ---- NAV scroll shadow ---- */
   var nav = document.getElementById("nav");
@@ -907,13 +953,17 @@ a { color: inherit; text-decoration: none; }
 
   /* ---- LEAFLET MAP ---- */
   var map = L.map("campus-map", {
-    center: [46.8580, -71.3507],
+    center: [46.8219, -71.2372],
     zoom: 16,
     zoomControl: false,
     attributionControl: false
   });
   L.control.zoom({ position: "bottomright" }).addTo(map);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+  var isDark = document.documentElement.getAttribute("data-theme") === "dark";
+  var tileUrl = isDark
+    ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+    : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+  var mapTileLayer = L.tileLayer(tileUrl, {
     maxZoom: 19,
     attribution: '&copy; <a href="https://carto.com/">CARTO</a>'
   }).addTo(map);
@@ -932,12 +982,12 @@ a { color: inherit; text-decoration: none; }
   }
 
   var scooters = [
-    { lat: 46.8587, lng: -71.3512, name: "TL-001", status: "Disponible",   color: "#bae562" },
-    { lat: 46.8575, lng: -71.3498, name: "TL-002", status: "Disponible",   color: "#bae562" },
-    { lat: 46.8582, lng: -71.3525, name: "TL-003", status: "En course",    color: "#f6fd54" },
-    { lat: 46.8591, lng: -71.3502, name: "TL-004", status: "Disponible",   color: "#bae562" },
-    { lat: 46.8569, lng: -71.3515, name: "TL-005", status: "Maintenance",  color: "#666666" },
-    { lat: 46.8578, lng: -71.3490, name: "TL-006", status: "En course",    color: "#f6fd54" }
+    { lat: 46.8225, lng: -71.2380, name: "TL-001", status: "Disponible",   color: "#bae562" },
+    { lat: 46.8212, lng: -71.2365, name: "TL-002", status: "Disponible",   color: "#bae562" },
+    { lat: 46.8230, lng: -71.2395, name: "TL-003", status: "En course",    color: "#f6fd54" },
+    { lat: 46.8235, lng: -71.2360, name: "TL-004", status: "Disponible",   color: "#bae562" },
+    { lat: 46.8208, lng: -71.2385, name: "TL-005", status: "Maintenance",  color: "#666666" },
+    { lat: 46.8218, lng: -71.2350, name: "TL-006", status: "En course",    color: "#f6fd54" }
   ];
 
   scooters.forEach(function(s) {
