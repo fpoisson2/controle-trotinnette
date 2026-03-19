@@ -89,7 +89,7 @@ class TinyGsmA76xxSSL : public TinyGsmA76xx<TinyGsmA76xxSSL>,
       sock_connected = false;
     }
     void stop() override {
-      stop(15000L);
+      stop(1000L);  // 1s max au lieu de 15s — évite de bloquer Core 1
     }
 
     /*
@@ -191,17 +191,13 @@ class TinyGsmA76xxSSL : public TinyGsmA76xx<TinyGsmA76xxSSL>,
   void maintainImpl() {
     // Keep listening for modem URC's and proactively iterate through
     // sockets asking if any data is available
-    bool check_socks = false;
     for (int mux = 0; mux < TINY_GSM_MUX_COUNT; mux++) {
       GsmClientA76xxSSL* sock = sockets[mux];
       if (sock && sock->got_data) {
         sock->got_data = false;
-        check_socks    = true;
+        modemGetAvailable(mux);  // Appeler pour le bon mux !
       }
     }
-    // modemGetAvailable checks all socks, so we only want to do it once
-    // modemGetAvailable calls modemGetConnected(), which also checks allf
-    if (check_socks) { modemGetAvailable(0); }
     while (stream.available()) { waitResponse(15, NULL, NULL); }
   }
 
@@ -600,35 +596,34 @@ class TinyGsmA76xxSSL : public TinyGsmA76xx<TinyGsmA76xxSSL>,
   }
 
   size_t sslAvailable(uint8_t mux) {
-    // If the socket doesn't exist, just return
     if (!sockets[mux]) { return 0; }
-    // We need to check if there are any connections open *before* checking for
-    // available characters.  The A76XX *will crash* if you ask about data
-    // when there are no open connections.
-    if (!modemGetConnected(mux)) { return 0; }
+    // Faire confiance à sock_connected (mis à jour par URC +CCH_PEER_CLOSED)
+    // au lieu d'envoyer AT+CCHOPEN? à chaque appel (trop de commandes AT)
+    if (!sockets[mux]->sock_connected) { return 0; }
 
-    // NOTE: This gets how many characters are available on all connections that
-    // have data.  It does not return all the connections, just those with data.
+    // Envoyer AT+CCHRECV? seulement si on a reçu un RECV EVENT (got_data)
+    // ou périodiquement (toutes les 500ms) pour ne pas bombarder le modem
+    static uint32_t _lastRecvCheck = 0;
+    bool needCheck = sockets[mux]->got_data;
+    if (!needCheck && millis() - _lastRecvCheck > 500) {
+      needCheck = true;
+    }
+    if (!needCheck) {
+      return sockets[mux]->sock_available;
+    }
+    _lastRecvCheck = millis();
+
     sendAT(GF("+CCHRECV?"));
-    // +CCHRECV: LEN,2048,0
     int res = waitResponse(3000, GF("+CCHRECV: LEN,"), GFP(GSM_OK), GFP(GSM_ERROR));
-    // if we get the +CCHRECV: response, read the mux number and the number of
-    // characters available
     if (res == 1) {
-      // +CCHRECV: LEN,2048,0
       size_t result  = streamGetIntBefore(',');
       int    ret_mux = streamGetIntBefore('\n');
-      if (ret_mux == -9999) {
-        // DBG("ERROR: mux = -9999");
-        return 0;
-      }
+      if (ret_mux == -9999) { return 0; }
       GsmClientA76xxSSL* sock = sockets[ret_mux];
       waitResponse();
-      // DBG("---- available:", result, "ret_mux", ret_mux);
       if (sock) { sock->sock_available = result; }
     }
     if (!sockets[mux]) { return 0; }
-    // DBG("sockets[mux]->sock_available=", sockets[mux]->sock_available);
     return sockets[mux]->sock_available;
   }
 
@@ -924,9 +919,16 @@ class TinyGsmA76xxSSL : public TinyGsmA76xx<TinyGsmA76xxSSL>,
         } else if (data.endsWith(GF("SIM REMOVED"))) {
           data = "";
           // TODO:
-        } else if (data.endsWith(GF("+CCHEVENT: 0,RECV EVENT"))) {
+        } else if (data.endsWith(GF(",RECV EVENT"))) {
+          // +CCHEVENT: <mux>,RECV EVENT — données SSL reçues
+          // Extraire le mux depuis la fin de data (format: "+CCHEVENT: X,RECV EVENT")
+          int cchMux = -1;
+          int cchIdx = data.indexOf("+CCHEVENT: ");
+          if (cchIdx >= 0) cchMux = data.charAt(cchIdx + 11) - '0';
+          if (cchMux >= 0 && cchMux < TINY_GSM_MUX_COUNT && sockets[cchMux]) {
+            sockets[cchMux]->got_data = true;
+          }
           data = "";
-          // TODO:
         } else if (data.endsWith(GF("+CCH_PEER_CLOSED:"))) {
           int8_t mux = streamGetIntBefore('\n');
           if (mux >= 0 && mux < TINY_GSM_MUX_COUNT && sockets[mux]) {

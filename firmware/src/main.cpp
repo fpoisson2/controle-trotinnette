@@ -1,3 +1,5 @@
+// Définir les variables globales du modem dans cette unité de compilation
+#define MODEM_DEFINE_GLOBALS
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebSocketsServer.h>
@@ -94,6 +96,12 @@ static int brakeAdcMin    = BRAKE_ADC_MIN;
 // Buffer télémétrie partagé Core0→Core1 (wsProxy uniquement sur Core1)
 static volatile bool telemetryPending = false;
 static char          telemetryJsonBuf[256];
+
+// Watchdog Core 1 : Core 1 met à jour ce timestamp, Core 0 vérifie
+static volatile uint32_t core1Heartbeat = 0;
+static uint32_t          core1WatchdogStart = 0;  // début de la surveillance
+#define CORE1_WATCHDOG_MS    30000  // 30s sans heartbeat → reboot
+#define CORE1_GRACE_MS       60000  // grâce 60s après le boot avant de surveiller
 
 // Timestamp dernière commande IA (priorité sur manette physique)
 static volatile uint32_t lastAiCmd = 0;
@@ -227,9 +235,9 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
 
         case WStype_DISCONNECTED:
             wsProxyConnected = false;
-            Serial.println("[ws-proxy] déconnecté — reconnexion auto");
+            Serial.printf("[ws-proxy] déconnecté (uptime %lu s) — reconnexion auto\n",
+                          millis() / 1000);
             pendingBeep = 4;  // proxy lost (joué dans loop)
-            wsLog("[ws-proxy] déconnecté — reconnexion auto");
             break;
 
         case WStype_TEXT: {
@@ -402,6 +410,7 @@ static size_t  pcmAccumLen = 0;
 static void taskCapture(void *) {
     wsLog("[capture] tâche démarrée");
     while (true) {
+        core1Heartbeat = millis();  // Watchdog : prouver que Core 1 est vivant
 #if AUDIO_LOOPBACK
         // Mode test : bouton enfoncé = enregistre, relâché = rejoue
         static const size_t REC_MAX = 16000 * 2 * 2;
@@ -436,11 +445,26 @@ static void taskCapture(void *) {
         }
         wasActive = nowActive;
 #else
-        // Traiter les URCs du modem LTE (données entrantes SSL)
+        // wsProxy.loop() gère connexion + réception
+        wsProxy.loop();
+
+        // ── Reconnexion manuelle LTE : reset SSL du modem si déconnecté ──────
+        // La lib WebSocket reconnecte automatiquement, mais les sessions SSL
+        // fantômes du modem empêchent la reconnexion propre.
 #if LTE_ENABLED
-        if (_wsUseLte) _modem.maintain();
+        if (_wsUseLte && !wsProxyConnected) {
+            static uint32_t lastSslReset = 0;
+            if (millis() - lastSslReset > 10000) {  // pas plus d'un reset/10s
+                lastSslReset = millis();
+                Serial.println("[ws-lte] reset SSL modem (CCHSTOP+CCHSTART)");
+                _modem.sendAT("+CCHSTOP");
+                _modem.waitResponse(3000);
+                delay(500);
+                _modem.sendAT("+CCHSTART");
+                _modem.waitResponse(3000);
+            }
+        }
 #endif
-        wsProxy.loop();  // maintenir connexion + recevoir réponses IA (Core1 seulement)
 
         // Envoyer télémétrie en attente (écrit par Core0, envoyé ici sur Core1)
         if (telemetryPending && wsProxyConnected) {
@@ -644,11 +668,10 @@ static void checkConnectivityWatchdog() {
     bool wsOk   = wsProxyConnected;
     bool loraOk = loraIsActive();
 
-    // LTE : vérifier seulement si activé
-    bool lteOk = false;
-#if LTE_ENABLED
-    lteOk = modemIsConnected();
-#endif
+    // LTE : NE PAS appeler modemIsConnected() depuis Core 0 !
+    // TinyGSM n'est pas thread-safe : les commandes AT sont envoyées par Core 1
+    // via wsProxy.loop(). Utiliser wsProxyConnected comme indicateur LTE.
+    bool lteOk = _wsUseLte && wsProxyConnected;
 
     bool anyLink = wifiOk || wsOk || lteOk || loraOk;
 
@@ -823,8 +846,11 @@ void setup() {
     // WebSocket client unique vers proxy (audio + réponses IA)
     wsProxy.beginSSL(PROXY_HOST, PROXY_PORT, "/ws-esp32");
     wsProxy.onEvent(onWsProxyEvent);
-    wsProxy.setReconnectInterval(3000);
-    wsProxy.enableHeartbeat(10000, 3000, 2);  // ping/10 s — évite coupure Cloudflare
+    wsProxy.setReconnectInterval(5000);  // 5s entre les tentatives de reconnexion
+    // Pas de heartbeat ping/pong : TinyGSM SSL est trop lent pour lire les pongs
+    // à temps. La télémétrie envoyée toutes les 500ms suffit à garder la connexion
+    // active (Cloudflare idle timeout = 100s)
+    // wsProxy.enableHeartbeat(...);
     wsLog("[ws-proxy] connexion vers wss://%s/ws-esp32\n", PROXY_HOST);
 
     // Tâche capture + wsProxy sur Core 1
@@ -1193,6 +1219,33 @@ void loop() {
                     break;
                 default:
                     break;
+            }
+        }
+    }
+#endif
+
+    // ── Heartbeat Core 0 (diagnostic) + Watchdog Core 1 ─────────────────────
+#if LTE_ENABLED
+    if (_wsUseLte) {
+        static uint32_t lastC0Hb = 0;
+        if (millis() - lastC0Hb >= 15000) {
+            lastC0Hb = millis();
+            uint32_t hb = core1Heartbeat;
+            uint32_t delta = hb > 0 ? millis() - hb : 0;
+            Serial.printf("[hb] C0 ok, C1 delta=%lu ms, ws=%d, heap=%u\n",
+                          (unsigned long)delta, (int)wsProxyConnected,
+                          (unsigned)esp_get_free_heap_size());
+        }
+        if (millis() > CORE1_GRACE_MS) {
+            uint32_t hb = core1Heartbeat;
+            if (hb > 0) {
+                uint32_t delta = millis() - hb;
+                if (delta > CORE1_WATCHDOG_MS) {
+                    Serial.printf("[watchdog] Core 1 bloqué %lu ms — reboot!\n",
+                                  (unsigned long)delta);
+                    delay(100);
+                    ESP.restart();
+                }
             }
         }
     }

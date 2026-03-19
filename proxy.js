@@ -155,10 +155,14 @@ function broadcastSSE(obj) {
   for (const client of sseClients) {
     try { client.write(payload); } catch (_) { /* client déconnecté */ }
   }
-  // Envoyer aussi à la trottinette sélectionnée (réponses audio, commandes)
-  const selected = getSelectedScooter();
-  if (selected && selected.ws.readyState === WebSocket.OPEN) {
-    try { selected.ws.send(JSON.stringify(obj)); } catch (_) {}
+  // Envoyer à la trottinette SEULEMENT les messages qu'elle traite
+  // (pas les transcripts, scooter_list, ota_build, etc. — trop de données pour LTE)
+  const espTypes = new Set(['cmd', 'audio', 'lock', 'music', 'debug', 'ota_begin', 'ota_end']);
+  if (espTypes.has(obj.type)) {
+    const selected = getSelectedScooter();
+    if (selected && selected.ws.readyState === WebSocket.OPEN) {
+      try { selected.ws.send(JSON.stringify(obj)); } catch (_) {}
+    }
   }
 }
 
@@ -1290,6 +1294,13 @@ const esp32Wss = new WebSocket.Server({ noServer: true });
 esp32Wss.on('connection', (ws) => {
   console.log('[esp32-ws] nouvelle connexion (attente hello)');
   let scooterId = null;
+
+  // Ping WebSocket toutes les 20s pour garder la connexion vivante via Cloudflare
+  const espPing = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.ping();
+  }, 20000);
+  ws.on('close', () => clearInterval(espPing));
+  ws.on('error', () => clearInterval(espPing));
 
   ws.on('message', (data, isBinary) => {
     if (isBinary) {

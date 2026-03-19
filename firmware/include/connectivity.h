@@ -239,20 +239,31 @@ static void connSetType(ConnType t) {
 //  WiFi : RSSI en dBm (typiquement -30 à -90)
 //  LTE  : qualité signal 0-31 convertie en pseudo-dBm
 // ─────────────────────────────────────────────────────────────────────────────
+// Cache RSSI LTE (mis à jour par Core 1 via connUpdateLteRSSI)
+static volatile int _lteRssiCache = -999;
+
 static int connGetRSSI() {
     switch (_connType) {
         case CONN_WIFI:
             return WiFi.RSSI();
 #if LTE_ENABLED
-        case CONN_LTE: {
-            // Convertir qualité 0-31 en pseudo-dBm (-113 à -51)
-            int sq = modemSignalQuality();
-            return -113 + (sq * 2);
-        }
+        case CONN_LTE:
+            // Pas d'appel AT ici ! Retourner le cache mis à jour par Core 1
+            return _lteRssiCache;
 #endif
         default:
-            return -999;  // Pas de connexion
+            return -999;
     }
+}
+
+// Appelé depuis Core 1 uniquement pour mettre à jour le RSSI LTE
+static void connUpdateLteRSSI() {
+#if LTE_ENABLED
+    if (_connType == CONN_LTE) {
+        int sq = modemSignalQuality();
+        _lteRssiCache = -113 + (sq * 2);
+    }
+#endif
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
