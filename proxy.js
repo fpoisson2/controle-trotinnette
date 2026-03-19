@@ -248,40 +248,48 @@ function connectOpenAI() {
     }
   );
 
+  // Heartbeat pour détecter les connexions mortes
+  let openaiPingInterval = null;
+  let openaiLastPong = Date.now();
+
+  openaiWs.on('pong', () => { openaiLastPong = Date.now(); });
+
   openaiWs.on('open', () => {
     openaiConnected = true;
+    openaiLastPong = Date.now();
     console.log('[openai] connecté – envoi session.update');
+
+    // Ping toutes les 20s, ferme si pas de pong depuis 45s
+    openaiPingInterval = setInterval(() => {
+      if (Date.now() - openaiLastPong > 45000) {
+        console.warn('[openai] pas de pong depuis 45s – reconnexion');
+        clearInterval(openaiPingInterval);
+        openaiWs.terminate();
+        return;
+      }
+      if (openaiWs.readyState === WebSocket.OPEN) openaiWs.ping();
+    }, 20000);
 
     openaiWs.send(JSON.stringify({
       type: 'session.update',
       session: {
         modalities: ['text', 'audio'],
         instructions:
-          'Tu es le système de contrôle vocal d\'une trottinette électrique. ' +
-          'Tu communiques UNIQUEMENT en français, en une phrase courte. ' +
-          'IL Y A DEUX TYPES DE DEMANDES — ne les confonds JAMAIS :\n' +
-          '1) QUESTIONS / INFORMATIONS (batterie, tension, vitesse, température, position) ' +
-          '→ appelle UNIQUEMENT lire_telemetrie. N\'appelle JAMAIS commande_trottinette pour une question.\n' +
-          '2) COMMANDES DE MOUVEMENT (avancer, accélérer, freiner, arrêter, changer de vitesse) ' +
-          '→ appelle UNIQUEMENT commande_trottinette.\n' +
-          'Exemples QUESTIONS : "quelle est la tension ?" → lire_telemetrie ; ' +
-          '"on roule à combien ?" → lire_telemetrie ; ' +
-          '"batterie ?" → lire_telemetrie.\n' +
-          'Exemples COMMANDES : "avance" → commande_trottinette(avancer, 0.6) ; ' +
-          '"à fond" → commande_trottinette(avancer, 1.0) ; ' +
-          '"doucement" → commande_trottinette(avancer, 0.3) ; ' +
-          '"freine" → commande_trottinette(freiner, 0.8) ; ' +
-          '"stop" → commande_trottinette(arreter).\n' +
-          'Appelle TOUJOURS l\'outil EN PREMIER, puis confirme en une phrase.',
+          'Contrôle vocal d\'une trottinette. Réponds en français, MAX 1 phrase courte.\n' +
+          'Question (batterie, vitesse, tension, temp) → lire_telemetrie\n' +
+          'Mouvement (avance, freine, stop) → commande_trottinette\n' +
+          'Appelle l\'outil PUIS confirme brièvement.',
         voice: 'alloy',
         input_audio_format: 'pcm16',
         output_audio_format: 'pcm16',
         input_audio_transcription: null,
         turn_detection: {
-          type: 'semantic_vad',
-          eagerness: 'high',
+          type: 'server_vad',
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 500,
           create_response: true,
-          interrupt_response: true
+          interrupt_response: false
         },
         tools: [TOOL_SCHEMA, TELEMETRY_TOOL_SCHEMA],
         tool_choice: 'auto'
@@ -385,6 +393,7 @@ function connectOpenAI() {
 
   openaiWs.on('close', () => {
     openaiConnected = false;
+    if (openaiPingInterval) clearInterval(openaiPingInterval);
     console.log('[openai] déconnecté – reconnexion dans 5 s');
     setTimeout(connectOpenAI, 5000);
   });
