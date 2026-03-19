@@ -10,9 +10,8 @@ services:
       - pio-cache:/root/.platformio
       - builds:/app/builds
       - data:/app/data
-      # Monter config.h si présent (nécessaire uniquement pour la compilation OTA)
-      # Commenter si le fichier n'existe pas encore
-      # - ./firmware/include/config.h:/app/firmware/include/config.h:ro
+      # Monter config.h (nécessaire pour la compilation OTA)
+      - ./firmware/include/config.h:/app/firmware/include/config.h:ro
     ports:
       - "${PROXY_PORT:-3000}:3000"
 
