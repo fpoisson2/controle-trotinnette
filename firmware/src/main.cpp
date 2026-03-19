@@ -203,6 +203,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
             wsProxyConnected = true;
             lastWifiActivity = millis();
             Serial.println("[ws-proxy] connecté à " PROXY_HOST);
+            audioBeepProxyOk();
             wsLog("[ws-proxy] connecté");
             // Envoyer la version firmware + MAC au proxy
             {
@@ -219,6 +220,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
         case WStype_DISCONNECTED:
             wsProxyConnected = false;
             Serial.println("[ws-proxy] déconnecté — reconnexion auto");
+            audioBeepProxyLost();
             wsLog("[ws-proxy] déconnecté — reconnexion auto");
             break;
 

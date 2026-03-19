@@ -196,6 +196,10 @@ inline void audioBeepPttOff() { audioBeep(440.0f, 60); }
 inline void audioBeepWifiOk()   { audioBeep(330.0f, 40); audioBeep(500.0f, 40); }
 // Bip WiFi déconnecté : double-bip grave descendant (500→220 Hz)
 inline void audioBeepWifiLost() { audioBeep(500.0f, 40); audioBeep(220.0f, 80); }
+// Bip proxy connecté : triple-bip montant rapide (330→500→660 Hz)
+inline void audioBeepProxyOk()   { audioBeep(330.0f, 30); audioBeep(500.0f, 30); audioBeep(660.0f, 30); }
+// Bip proxy déconnecté : triple-bip descendant (660→400→220 Hz)
+inline void audioBeepProxyLost() { audioBeep(660.0f, 30); audioBeep(400.0f, 30); audioBeep(220.0f, 50); }
 
 // ── Décoder base64 et enqueue dans le ring buffer DAC ────────────────────────
 // Buffer statique : les chunks base64 font max 4096 chars → ~3072 bytes PCM

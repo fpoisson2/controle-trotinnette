@@ -371,9 +371,9 @@ static void musicTick(bool pttActive) {
         uint32_t phase = micros() % periodUs;
 
         if (phase < halfPeriod) {
-            dac_output_voltage(DAC_CHANNEL_1, 190); // haut
+            dac_output_voltage(DAC_CHANNEL_1, 160); // haut (réduit pour éviter saturation)
         } else {
-            dac_output_voltage(DAC_CHANNEL_1, 66);  // bas
+            dac_output_voltage(DAC_CHANNEL_1, 96);  // bas
         }
     }
 }
