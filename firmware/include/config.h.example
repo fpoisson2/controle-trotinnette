@@ -16,11 +16,11 @@
 
 // ── Proxy ─────────────────────────────────────────────────────────────────────
 // Connexion HTTPS via tunnel Cloudflare (port 443)
-#define PROXY_HOST       "trottinnette.ve2fpd.com"
+#define PROXY_HOST       "trotilou.ca"
 #define PROXY_PORT       443
 
 // ── WebSocket serveur (le proxy se connecte ici pour envoyer les commandes) ───
-// Définir SCOOTER_WS=ws://trottinette.local:8080 dans le .env du proxy
+// Définir SCOOTER_WS=ws://trotilou.local:8080 dans le .env du proxy
 #define WS_SERVER_PORT   8080
 
 // ── Bouton toggle vocal ───────────────────────────────────────────────────────

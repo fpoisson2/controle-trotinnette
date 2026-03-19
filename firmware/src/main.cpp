@@ -169,9 +169,9 @@ static void connectWiFi() {
     }
     wsLog("\n[wifi] connecté : %s\n", WiFi.localIP().toString().c_str());
 
-    if (MDNS.begin("trottinette")) {
+    if (MDNS.begin("trotilou")) {
         MDNS.addService("ws", "tcp", WS_SERVER_PORT);
-        wsLog("[mdns] trottinette.local");
+        wsLog("[mdns] trotilou.local");
     }
 
     // OTA
@@ -707,7 +707,7 @@ void setup() {
             MDNS.end();
             if (MDNS.begin("trottinette")) {
                 MDNS.addService("ws", "tcp", WS_SERVER_PORT);
-                wsLog("[mdns] trottinette.local (ré-enregistré)");
+                wsLog("[mdns] trotilou.local (ré-enregistré)");
             }
         }
     });

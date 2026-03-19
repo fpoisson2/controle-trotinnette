@@ -141,11 +141,11 @@ pio device monitor
 
 ## Fonctionnement
 
-1. Au démarrage, l'ESP32 se connecte au WiFi et s'enregistre sous `trottinette.local`
+1. Au démarrage, l'ESP32 se connecte au WiFi et s'enregistre sous `trotilou.local`
 2. L'ADC est auto-calibré sur 100 échantillons (1 s) — throttle et frein au repos
 3. **Bouton Gear-F (GPIO 22)** : tenir = microphone actif, relâcher = micro inactif
 4. **Boutons Gear-L / Gear-H** : sélection de la limite de vitesse (33 % / 100 %)
-5. L'audio est streamé vers le proxy (`wss://trottinette.ve2fpd.com/ws-esp32`)
+5. L'audio est streamé vers le proxy (`wss://trotilou.ca/ws-esp32`)
 6. L'IA (OpenAI Realtime) traite la voix et envoie des commandes (`avancer`, `freiner`, etc.)
 7. Les commandes IA ont priorité sur la manette pendant 3 secondes (`AI_CMD_PRIORITY_MS`)
 8. La télémétrie ESC est envoyée toutes les 500 ms vers l'interface web
@@ -187,7 +187,7 @@ Broches VSPI disponibles (18/19/23 occupés — utiliser HSPI ou SPI software) :
 
 ## Proxy
 
-Le proxy Node.js tourne sur `trottinette.ve2fpd.com` (Cloudflare, port 443).
+Le proxy Node.js tourne sur `trotilou.ca` (Cloudflare, port 443).
 
 Variables `.env` requises :
 

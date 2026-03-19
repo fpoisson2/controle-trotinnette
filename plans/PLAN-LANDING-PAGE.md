@@ -1,8 +1,8 @@
-# Landing Page — "LimoTrott" — Service de trottinettes du Cégep Limoilou
+# Landing Page — "Trotilou" — Service de trottinettes du Cégep Limoilou
 
 ## Identité visuelle
 
-**Nom** : LimoTrott (Limoilou + trottinette)
+**Nom** : Trotilou (trottinette + Limoilou)
 
 **Slogan du Cégep** : "Vois grand" / "Chemine comme personne"
 
@@ -12,7 +12,7 @@
 
 Les couleurs sont extraites directement du site web du Cégep (`cegeplimoilou.ca`).
 
-| Variable | Hex | Source Cégep | Usage LimoTrott |
+| Variable | Hex | Source Cégep | Usage Trotilou |
 |----------|-----|-------------|-----------------|
 | `--color-primary` | `#ed1e20` | `--wp--preset--color--red` | **Rouge Limoilou** — CTA, accents forts, alertes |
 | `--color-primary-dark` | `#343030` | `--wp--preset--color--charcoal` | Hover, footer, headings |
@@ -109,7 +109,7 @@ Communauto suit une architecture **hero-to-conversion** efficace qu'on adapte :
 - Vitesse limitée à 20 km/h (10 km/h zones achalandées)
 
 ### 6. Footer
-- Logo LimoTrott + "Mobilité verte pour le campus"
+- Logo Trotilou + "Mobilité verte pour le campus"
 - Navigation, FAQ, conditions d'utilisation
 - Contact : Cégep Limoilou, Campus Charlesbourg
 - "Fait avec ❤ à Québec — Propulsé par ESP32 + OpenAI"

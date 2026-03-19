@@ -83,12 +83,12 @@ static void displayInit() {
     _u8g2.begin();
     _u8g2.setContrast(180);
 
-    // Logo de démarrage "LimoTrott"
+    // Logo de démarrage "Trotilou"
     _u8g2.clearBuffer();
     _u8g2.setFont(u8g2_font_helvB14_tr);
 
-    // Centrer "LimoTrott"
-    const char* title = "LimoTrott";
+    // Centrer "Trotilou"
+    const char* title = "Trotilou";
     int titleW = _u8g2.getStrWidth(title);
     _u8g2.drawStr((OLED_WIDTH - titleW) / 2, 28, title);
 

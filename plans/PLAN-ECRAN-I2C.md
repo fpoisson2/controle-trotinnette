@@ -89,7 +89,7 @@ Affiché quand les 3 liens RF sont perdus (WiFi + LTE + LoRa). Écran clignote.
 ## Intégration deep sleep
 
 - Avant sleep : `u8g2.setPowerSave(1)` → écran éteint (0.01 mA)
-- Au réveil : `displayInit()` → logo boot "LimoTrott" pendant 2s
+- Au réveil : `displayInit()` → logo boot "Trotilou" pendant 2s
 - Progression OTA affichée sur l'écran pendant le flash
 
 ## config.h
@@ -136,4 +136,4 @@ Affiché quand les 3 liens RF sont perdus (WiFi + LTE + LoRa). Écran clignote.
 5. Ajouter gestion boutons dans loop (debounce, lock, page)
 6. Implémenter pages 2, 3, 4 + page HORS ZONE
 7. Intégrer avec `sleep.h` (displayOff/displayInit)
-8. Logo boot "LimoTrott" en XBM
+8. Logo boot "Trotilou" en XBM

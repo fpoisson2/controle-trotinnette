@@ -354,7 +354,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--proxy-url",
-        default="https://trottinette.cegeplimoilou.ca",
+        default="https://trotilou.ca",
         help="URL du proxy pour les QR codes (defaut: %(default)s).",
     )
     args = parser.parse_args()

@@ -24,7 +24,7 @@ def load_dotenv(path):
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 # ── Config ──
-PROXY_URL  = os.environ.get("OTA_PROXY_URL", "https://trottinette.ve2fpd.com")
+PROXY_URL  = os.environ.get("OTA_PROXY_URL", "https://trotilou.ca")
 USERNAME   = os.environ.get("AUTH_USERNAME", "admin")
 PASSWORD   = os.environ.get("AUTH_PASSWORD", "")
 

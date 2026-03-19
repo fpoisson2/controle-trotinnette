@@ -1,4 +1,4 @@
-# LimoTrott — Trottinettes intelligentes pour le Cegep Limoilou
+# Trotilou — Trottinettes intelligentes pour le Cegep Limoilou
 
 Trottinettes electriques en libre-service controlees par la voix, deployees sur le campus du Cegep Limoilou a Quebec.
 
@@ -113,7 +113,7 @@ controle-trotinnette/
 ├── fleet.js                     # Gestion de flotte + persistance fleet.json
 │
 ├── index.html                   # Dashboard SPA (telemetrie, carte, controle vocal)
-├── landing.html                 # Page publique LimoTrott (hero, tarifs, carte)
+├── landing.html                 # Page publique Trotilou (hero, tarifs, carte)
 │
 ├── Dockerfile                   # Node.js + PlatformIO + better-sqlite3
 ├── docker-compose.yml           # Proxy + Cloudflare tunnel (optionnel)
