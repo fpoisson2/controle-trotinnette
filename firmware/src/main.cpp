@@ -467,13 +467,23 @@ static void taskCapture(void *) {
                     // Encoder en base64 et envoyer comme JSON texte
                     static char b64Buf[4096];  // 2048 bytes PCM → ~2732 chars base64
                     size_t b64Len = 0;
-                    mbedtls_base64_encode((unsigned char*)b64Buf, sizeof(b64Buf), &b64Len,
+                    int rc = mbedtls_base64_encode((unsigned char*)b64Buf, sizeof(b64Buf), &b64Len,
                                           pcmAccum, pcmAccumLen);
-                    // JSON : {"type":"audio_in","data":"<base64>"}
-                    static char jsonBuf[4300];
-                    int jLen = snprintf(jsonBuf, sizeof(jsonBuf),
-                        "{\"type\":\"audio_in\",\"data\":\"%.*s\"}", (int)b64Len, b64Buf);
-                    wsProxy.sendTXT(jsonBuf, jLen);
+                    if (rc == 0 && b64Len > 0) {
+                        // JSON : {"type":"audio_in","data":"<base64>"}
+                        static char jsonBuf[4300];
+                        int jLen = snprintf(jsonBuf, sizeof(jsonBuf),
+                            "{\"type\":\"audio_in\",\"data\":\"%.*s\"}", (int)b64Len, b64Buf);
+                        wsProxy.sendTXT(jsonBuf, jLen);
+                        static uint32_t lastAudioLog = 0;
+                        if (millis() - lastAudioLog > 2000) {
+                            Serial.printf("[audio] envoi b64 %u→%u bytes ws=%d\n",
+                                (unsigned)pcmAccumLen, (unsigned)jLen, wsProxyConnected);
+                            lastAudioLog = millis();
+                        }
+                    } else {
+                        Serial.printf("[audio] ERREUR base64 rc=%d\n", rc);
+                    }
                     pcmAccumLen = 0;
                 }
             } else if (!voiceActive && pcmAccumLen > 0) {
