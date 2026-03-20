@@ -133,11 +133,36 @@ public:
         return _wifiSSL.connect(ip, port);
     }
 
-    size_t write(uint8_t b) override { return activeSSL().write(b); }
-    size_t write(const uint8_t* buf, size_t sz) override { return activeSSL().write(buf, sz); }
+    size_t write(uint8_t b) override {
+        size_t r = activeSSL().write(b);
+#if LTE_ENABLED
+        if (_isLte && r == 0) { _sslConnected = false; }
+#endif
+        return r;
+    }
+    size_t write(const uint8_t* buf, size_t sz) override {
+        size_t r = activeSSL().write(buf, sz);
+#if LTE_ENABLED
+        if (_isLte && r == 0 && sz > 0) { _sslConnected = false; }
+#endif
+        return r;
+    }
     size_t write(const char* str) { return activeSSL().print(str); }
-    int available() override { return activeSSL().available(); }
+    int available() override {
+        int a = activeSSL().available();
+#if LTE_ENABLED
+        if (_isLte && a > 0) _lastDataReceived = millis();
+        // Timeout silencieux : si aucune donnée reçue depuis 120s, connexion morte
+        if (_isLte && _sslConnected && _lastDataReceived > 0 &&
+            millis() - _lastDataReceived > 120000) {
+            Serial.println("[ws-net] timeout silence 90s — connexion morte");
+            _sslConnected = false;
+        }
+#endif
+        return a;
+    }
     int read() override { return activeSSL().read(); }
+    uint32_t _lastDataReceived = 0;
     int read(uint8_t* buf, size_t sz) override { return activeSSL().read(buf, sz); }
     int peek() override { return activeSSL().peek(); }
     void flush() override { activeSSL().flush(); }

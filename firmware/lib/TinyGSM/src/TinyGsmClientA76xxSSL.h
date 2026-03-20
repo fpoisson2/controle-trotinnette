@@ -556,42 +556,36 @@ class TinyGsmA76xxSSL : public TinyGsmA76xx<TinyGsmA76xxSSL>,
     sendAT(GF("+CCHRECV="), mux, ',', (uint16_t)size);
 
     // +CCHRECV: DATA,0,430
-    int8_t res = waitResponse(30000UL, GF("+CCHRECV: DATA,"), GF("ERROR"));
-    if (res == 2) {
-      delay(1000);
+    int8_t res = waitResponse(5000UL, GF("+CCHRECV: DATA,"), GF("ERROR"));
+    if (res == 2 || res != 1) {
       return 0;
     }
 
     uint8_t       ret_mux       = streamGetIntBefore(',');
     const int16_t len_confirmed = streamGetIntBefore('\n');
 
-    // DBG("### READING:", len_confirmed, "from", ret_mux);
-    if (ret_mux != mux) {
-      // DBG("### Data from wrong mux! Got", ret_mux, "expected", mux);
+    if (ret_mux != mux || len_confirmed <= 0) {
       waitResponse();
-      sockets[mux]->sock_available = modemGetAvailable(mux);
       return 0;
     }
 
     for (int i = 0; i < len_confirmed; i++) {
       uint32_t startMillis = millis();
-      while (!stream.available() && (millis() - startMillis < sockets[mux]->_timeout)) {
+      while (!stream.available() && (millis() - startMillis < 3000)) {
         TINY_GSM_YIELD();
       }
       char c = stream.read();
       sockets[mux]->rx.put(c);
     }
 
-    if (waitResponse("+CCHRECV:") == 1) {
+    if (waitResponse(1000, GF("+CCHRECV:"), GFP(GSM_OK)) == 1) {
       ret_mux = streamGetIntBefore(',');
-      /*uint16_t remaining = */ streamGetIntBefore('\n');
+      int16_t remaining = streamGetIntBefore('\n');
+      if (remaining >= 0) sockets[mux]->sock_available = remaining;
+    } else {
+      sockets[mux]->sock_available = 0;
     }
 
-    // DBG("### READ:", len_confirmed, "from", mux);
-    // make sure the sock available number is accurate again
-    // the module is **EXTREMELY** testy about being asked to read more from
-    // the buffer than exits; it will freeze until a hard reset or power cycle!
-    sockets[mux]->sock_available = modemGetAvailable(mux);
     return len_confirmed;
   }
 
@@ -614,7 +608,7 @@ class TinyGsmA76xxSSL : public TinyGsmA76xx<TinyGsmA76xxSSL>,
     _lastRecvCheck = millis();
 
     sendAT(GF("+CCHRECV?"));
-    int res = waitResponse(3000, GF("+CCHRECV: LEN,"), GFP(GSM_OK), GFP(GSM_ERROR));
+    int res = waitResponse(1000, GF("+CCHRECV: LEN,"), GFP(GSM_OK), GFP(GSM_ERROR));
     if (res == 1) {
       size_t result  = streamGetIntBefore(',');
       int    ret_mux = streamGetIntBefore('\n');

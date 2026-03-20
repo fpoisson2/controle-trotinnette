@@ -847,10 +847,9 @@ void setup() {
     wsProxy.beginSSL(PROXY_HOST, PROXY_PORT, "/ws-esp32");
     wsProxy.onEvent(onWsProxyEvent);
     wsProxy.setReconnectInterval(5000);  // 5s entre les tentatives de reconnexion
-    // Pas de heartbeat ping/pong : TinyGSM SSL est trop lent pour lire les pongs
-    // à temps. La télémétrie envoyée toutes les 500ms suffit à garder la connexion
-    // active (Cloudflare idle timeout = 100s)
-    // wsProxy.enableHeartbeat(...);
+    // Heartbeat conservateur pour LTE — détecte les connexions mortes
+    // Ping/60s, pong timeout 30s, déconnexion après 3 ratés (= ~150s max avant détection)
+    wsProxy.enableHeartbeat(60000, 30000, 3);
     wsLog("[ws-proxy] connexion vers wss://%s/ws-esp32\n", PROXY_HOST);
 
     // Tâche capture + wsProxy sur Core 1
