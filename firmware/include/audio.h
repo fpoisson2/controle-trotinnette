@@ -73,15 +73,16 @@ static inline void IRAM_ATTR dacWriteFast(uint8_t val) {
 // est vide — la musique écrit directement au DAC depuis loop().
 volatile bool dacMusicMode = false;
 
+// Pré-buffer : si true, l'ISR ne lit pas le ring buffer (on accumule d'abord)
+volatile bool dacPreBuffering = false;
+
 void IRAM_ATTR onDacTimer() {
-    if (dacHead != dacTail) {
+    if (!dacPreBuffering && dacHead != dacTail) {
         dacWriteFast(dacRing[dacTail]);
         dacTail = (dacTail + 1) & DAC_RING_MASK;
     } else if (!dacMusicMode) {
-        dacWriteFast(128);  // silence DC (seulement si pas en mode musique)
+        dacWriteFast(128);  // silence DC
     }
-    // En mode musique avec buffer vide, on laisse le DAC tel quel
-    // (musicTick() gère la sortie directement)
 }
 
 // ── Initialisation I2S (microphone MEMS) ─────────────────────────────────────

@@ -246,25 +246,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
             if (deserializeJson(doc, payload, length)) break;
             const char *evtype = doc["type"] | "";
 
-            if (strcmp(evtype, "audio") == 0) {
-                static uint32_t lastAudioChunk = 0;
-                static uint32_t audioChunkCount = 0;
-                const char *b64 = doc["data"] | "";
-                size_t b64Len = strlen(b64);
-                if (b64Len > 0) {
-                    uint32_t now = millis();
-                    uint32_t gap = now - lastAudioChunk;
-                    audioChunkCount++;
-                    // Log les 5 premiers + tous les gaps > 200ms
-                    uint32_t buffered = (dacHead - dacTail + DAC_RING_SIZE) & DAC_RING_MASK;
-                    if (audioChunkCount <= 5 || gap > 200) {
-                        Serial.printf("[audio-rx] #%u b64=%u gap=%ums buf=%u/%u\n",
-                            audioChunkCount, (unsigned)b64Len, gap, buffered, DAC_RING_SIZE);
-                    }
-                    lastAudioChunk = now;
-                    audioPushBase64(b64, b64Len);
-                }
-            } else if (strcmp(evtype, "transcript") == 0) {
+            if (strcmp(evtype, "transcript") == 0) {
                 // stt visible sur la page web, pas besoin de log debug
             } else if (strcmp(evtype, "ai_response") == 0) {
                 // ia response visible sur la page web, pas besoin de log debug
@@ -386,8 +368,9 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
             break;
         }
         case WStype_BIN:
-            // En mode OTA, les messages binaires sont des chunks firmware
+            lastWifiActivity = millis();
             if (otaMode && length > 0) {
+                // Mode OTA : chunks firmware
                 size_t written = Update.write(payload, length);
                 if (written != length) {
                     wsLog("[ota] erreur écriture : %u/%u\n",
@@ -404,6 +387,36 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                         "{\"type\":\"ota_progress\",\"percent\":%u}", pct);
                     wsProxy.sendTXT(msg);
                 }
+            } else if (length > 0) {
+                // Audio PCM8 unsigned 8kHz brut du proxy
+                static uint32_t lastAudioChunk = 0;
+                static uint32_t audioChunkCount = 0;
+                uint32_t now = millis();
+                uint32_t gap = now - lastAudioChunk;
+
+                // Détecter début de nouvelle réponse (gap > 1s)
+                if (gap > 1000) {
+                    audioChunkCount = 0;
+                    dacPreBuffering = true;
+                }
+                audioChunkCount++;
+
+                // Écrire dans le ring buffer DAC
+                dacEnqueueRaw(payload, length);
+
+                uint32_t buffered = (dacHead - dacTail + DAC_RING_SIZE) & DAC_RING_MASK;
+
+                // Pré-buffer 300ms (8000 × 0.3 = 2400 samples) avant de lancer la lecture
+                if (dacPreBuffering && buffered >= 2400) {
+                    dacPreBuffering = false;
+                    Serial.printf("[audio] pré-buffer OK (%u samples)\n", buffered);
+                }
+
+                if (audioChunkCount <= 3 || gap > 500) {
+                    Serial.printf("[audio-rx] #%u len=%u gap=%ums buf=%u\n",
+                        audioChunkCount, (unsigned)length, gap, buffered);
+                }
+                lastAudioChunk = now;
             }
             break;
 
@@ -501,7 +514,7 @@ static void taskCapture(void *) {
             wsProxy.sendTXT(logQueue[logTail]);
             logTail = (logTail + 1) % LOG_QUEUE_SIZE;
         }
-        // Heartbeat debug toutes les 3s (directement sur Core1 pour test)
+        // Heartbeat debug toutes les 3s
         {
             static uint32_t lastDbgHb = 0;
             if (debugMode && wsProxyConnected && millis() - lastDbgHb > 3000) {

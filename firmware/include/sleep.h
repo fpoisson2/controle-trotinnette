@@ -42,9 +42,9 @@ static bool       _sleepAIDisconnected = false;
 #define SLEEP_ADC_ACTIVITY_THRESH  200
 
 // ── Intervalles de télémétrie par état ───────────────────────────────────────
-#define TELEMETRY_ACTIVE_MS        500     // Normal : 500 ms
-#define TELEMETRY_IDLE_LIGHT_MS    5000    // Veille légère : 5 s
-#define TELEMETRY_IDLE_DEEP_MS     30000   // Veille profonde : 30 s
+#define TELEMETRY_ACTIVE_MS        10000   // Normal : 10 s (LTE-friendly)
+#define TELEMETRY_IDLE_LIGHT_MS    30000   // Veille légère : 30 s
+#define TELEMETRY_IDLE_DEEP_MS     60000   // Veille profonde : 60 s
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  sleepGetPowerState() — Retourner l'état de puissance actuel

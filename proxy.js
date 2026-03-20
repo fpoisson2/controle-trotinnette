@@ -151,11 +151,35 @@ function getSelectedTelemetry() {
 
 // ─── Broadcast vers navigateurs (SSE) + trottinette sélectionnée (WS) ──────
 
-// Envoyer l'audio resampleé à l'ESP (appelé depuis le handler OpenAI)
-function sendAudioToEsp(b64_8k) {
+// ── Audio vers ESP : binaire PCM8 8kHz, accumulé par petits lots ────────────
+// Chaque OpenAI delta (~170 samples 8kHz = 21ms) est trop petit pour un message
+// On accumule ~200ms puis on envoie en binaire brut (pas de JSON/base64)
+const AUDIO_FLUSH_MS = 200;
+let audioAccum = [];
+let audioAccumBytes = 0;
+let audioFlushTimer = null;
+
+function flushAudioToEsp() {
+  audioFlushTimer = null;
+  if (audioAccumBytes === 0) return;
   const selected = getSelectedScooter();
   if (selected && selected.ws.readyState === WebSocket.OPEN) {
-    try { selected.ws.send(JSON.stringify({ type: 'audio', data: b64_8k })); } catch (_) {}
+    const merged = Buffer.concat(audioAccum, audioAccumBytes);
+    try { selected.ws.send(merged); } catch (_) {}
+  }
+  audioAccum = [];
+  audioAccumBytes = 0;
+}
+
+function sendAudioToEsp(pcm8buf) {
+  audioAccum.push(pcm8buf);
+  audioAccumBytes += pcm8buf.length;
+  // Flush si assez accumulé (~1600 bytes = 200ms à 8kHz) ou par timer
+  if (audioAccumBytes >= 1600) {
+    if (audioFlushTimer) { clearTimeout(audioFlushTimer); audioFlushTimer = null; }
+    flushAudioToEsp();
+  } else if (!audioFlushTimer) {
+    audioFlushTimer = setTimeout(flushAudioToEsp, AUDIO_FLUSH_MS);
   }
 }
 
@@ -349,9 +373,8 @@ function connectOpenAI() {
           const ssePayload = `data: ${JSON.stringify({ type: 'audio', data: b64.slice(i, i + CHUNK) })}\n\n`;
           for (const c of sseClients) { try { c.write(ssePayload); } catch (_) {} }
         }
-        // Envoyer le 8kHz resampleé directement à l'ESP (chunk par chunk)
-        const b64_8k = pcm8.toString('base64');
-        sendAudioToEsp(b64_8k);
+        // Envoyer le PCM8 brut en binaire à l'ESP (accumulé par lots)
+        sendAudioToEsp(pcm8);
         break;
       }
 
