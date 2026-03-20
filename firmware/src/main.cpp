@@ -247,9 +247,21 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
             const char *evtype = doc["type"] | "";
 
             if (strcmp(evtype, "audio") == 0) {
+                static uint32_t lastAudioChunk = 0;
+                static uint32_t audioChunkCount = 0;
                 const char *b64 = doc["data"] | "";
                 size_t b64Len = strlen(b64);
                 if (b64Len > 0) {
+                    uint32_t now = millis();
+                    uint32_t gap = now - lastAudioChunk;
+                    audioChunkCount++;
+                    // Log les 5 premiers + tous les gaps > 200ms
+                    uint32_t buffered = (dacHead - dacTail + DAC_RING_SIZE) & DAC_RING_MASK;
+                    if (audioChunkCount <= 5 || gap > 200) {
+                        Serial.printf("[audio-rx] #%u b64=%u gap=%ums buf=%u/%u\n",
+                            audioChunkCount, (unsigned)b64Len, gap, buffered, DAC_RING_SIZE);
+                    }
+                    lastAudioChunk = now;
                     audioPushBase64(b64, b64Len);
                 }
             } else if (strcmp(evtype, "transcript") == 0) {
@@ -1028,26 +1040,29 @@ void loop() {
 #if LTE_ENABLED
     if (_wsUseLte) {
         static uint32_t lastWifiScan = 0;
-        if (millis() - lastWifiScan > 300000) {  // 5 min = ~8600 req/mois (gratuit Google)
+        if (millis() - lastWifiScan > 30000) {  // TODO: remettre à 300000 après test
             lastWifiScan = millis();
             // Activer WiFi brièvement pour scanner
             WiFi.mode(WIFI_STA);
+            delay(100);
             int n = WiFi.scanNetworks(false, false, false, 300);
+            Serial.printf("[wifi-scan] %d réseaux trouvés\n", n);
             if (n > 0) {
-                // Construire JSON avec les top 10 APs (BSSID + RSSI)
-                JsonDocument wdoc;
-                wdoc["type"] = "wifi_scan";
-                JsonArray aps = wdoc["aps"].to<JsonArray>();
-                for (int i = 0; i < min(n, 10); i++) {
-                    JsonObject ap = aps.add<JsonObject>();
-                    ap["mac"] = WiFi.BSSIDstr(i);
-                    ap["rssi"] = WiFi.RSSI(i);
-                    ap["ch"] = WiFi.channel(i);
+                // Construire JSON compact — max 4 APs pour tenir dans LOG_MSG_SIZE (256)
+                // Google Geolocation API n'a besoin que de 2-3 APs
+                int count = min(n, 4);
+                int pos = 0;
+                char buf[LOG_MSG_SIZE];
+                pos += snprintf(buf + pos, sizeof(buf) - pos, "{\"type\":\"wifi_scan\",\"aps\":[");
+                for (int i = 0; i < count && pos < (int)sizeof(buf) - 60; i++) {
+                    if (i > 0) buf[pos++] = ',';
+                    pos += snprintf(buf + pos, sizeof(buf) - pos,
+                        "{\"mac\":\"%s\",\"rssi\":%d,\"ch\":%d}",
+                        WiFi.BSSIDstr(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
                 }
-                char buf[512];
-                serializeJson(wdoc, buf, sizeof(buf));
-                // Envoyer via le buffer partagé (Core 1 envoie)
-                // On utilise la queue de logs car le buffer télémétrie est occupé
+                pos += snprintf(buf + pos, sizeof(buf) - pos, "]}");
+                Serial.printf("[wifi-scan] JSON (%d octets): %s\n", pos, buf);
+                // Envoyer via la queue de logs (Core 1 envoie via wsProxy)
                 uint8_t next = (logHead + 1) % LOG_QUEUE_SIZE;
                 if (next != logTail) {
                     strncpy(logQueue[logHead], buf, LOG_MSG_SIZE - 1);

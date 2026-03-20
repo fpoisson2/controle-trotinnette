@@ -1402,6 +1402,8 @@ esp32Wss.on('connection', (ws) => {
           const entry = scooters.get(scooterId);
           const hasGpsFix = entry && entry.telemetry.gps_fix === 'ok';
           const geoKey = process.env.GOOGLE_GEOLOCATION_KEY;
+          console.log(`[wifi-scan] ${scooterId}: ${msg.aps?.length || 0} APs, gpsfix=${hasGpsFix}, key=${geoKey ? 'oui' : 'NON'}`);
+          if (!geoKey) console.warn('[wifi-scan] GOOGLE_GEOLOCATION_KEY manquante — ajouter au .env');
           if (geoKey && msg.aps && msg.aps.length > 0 && !hasGpsFix) {
             const body = {
               wifiAccessPoints: msg.aps.map(ap => ({
@@ -1415,7 +1417,9 @@ esp32Wss.on('connection', (ws) => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(body)
             }).then(r => r.json()).then(data => {
-              if (data.location) {
+              if (data.error) {
+                console.error(`[wifi-geo] API erreur: ${data.error.code} ${data.error.message}`);
+              } else if (data.location) {
                 console.log(`[wifi-geo] ${scooterId}: ${data.location.lat}, ${data.location.lng} (±${data.accuracy}m)`);
                 const entry = scooters.get(scooterId);
                 if (entry) {
