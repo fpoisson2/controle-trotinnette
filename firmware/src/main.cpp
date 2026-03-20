@@ -531,48 +531,28 @@ static void taskCapture(void *) {
         if (otaMode) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
 
         // ── I2S toujours actif, envoi audio seulement quand PTT enfoncé ──
-        // Audio envoyé en JSON base64 (les frames binaires passent mal via Cloudflare tunnel)
+        // Audio envoyé en binaire PCM16 brut (le proxy le forward à OpenAI)
         if (!sleepIsI2SDisabled()) {
             size_t len = audioCaptureChunk(pcmBuf);  // toujours drainer le DMA
             if (voiceActive && wsProxyConnected && len > 0) {
-                // Accumuler 2 chunks (64 ms) avant d'envoyer une frame WS
+                // Accumuler 4 chunks (128 ms) avant d'envoyer une frame WS binaire
                 if (pcmAccumLen + len <= sizeof(pcmAccum)) {
                     memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
                     pcmAccumLen += len;
                 }
                 if (pcmAccumLen >= sizeof(pcmAccum)) {
-                    // Encoder en base64 et envoyer comme JSON texte
-                    static char b64Buf[4096];  // 2048 bytes PCM → ~2732 chars base64
-                    size_t b64Len = 0;
-                    int rc = mbedtls_base64_encode((unsigned char*)b64Buf, sizeof(b64Buf), &b64Len,
-                                          pcmAccum, pcmAccumLen);
-                    if (rc == 0 && b64Len > 0) {
-                        // JSON : {"type":"audio_in","data":"<base64>"}
-                        static char jsonBuf[4300];
-                        int jLen = snprintf(jsonBuf, sizeof(jsonBuf),
-                            "{\"type\":\"audio_in\",\"data\":\"%.*s\"}", (int)b64Len, b64Buf);
-                        wsProxy.sendTXT(jsonBuf, jLen);
-                        static uint32_t lastAudioLog = 0;
-                        if (millis() - lastAudioLog > 2000) {
-                            Serial.printf("[audio] envoi b64 %u→%u bytes ws=%d\n",
-                                (unsigned)pcmAccumLen, (unsigned)jLen, wsProxyConnected);
-                            lastAudioLog = millis();
-                        }
-                    } else {
-                        Serial.printf("[audio] ERREUR base64 rc=%d\n", rc);
+                    wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
+                    static uint32_t lastAudioLog = 0;
+                    if (millis() - lastAudioLog > 2000) {
+                        Serial.printf("[audio] envoi bin %u bytes ws=%d\n",
+                            (unsigned)pcmAccumLen, wsProxyConnected);
+                        lastAudioLog = millis();
                     }
                     pcmAccumLen = 0;
                 }
             } else if (!voiceActive && pcmAccumLen > 0) {
-                // Flush le reste en base64
-                static char b64Buf[4096];
-                size_t b64Len = 0;
-                mbedtls_base64_encode((unsigned char*)b64Buf, sizeof(b64Buf), &b64Len,
-                                      pcmAccum, pcmAccumLen);
-                static char jsonBuf[4300];
-                int jLen = snprintf(jsonBuf, sizeof(jsonBuf),
-                    "{\"type\":\"audio_in\",\"data\":\"%.*s\"}", (int)b64Len, b64Buf);
-                wsProxy.sendTXT(jsonBuf, jLen);
+                // Flush le reste
+                wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
                 pcmAccumLen = 0;
             }
         } else {
