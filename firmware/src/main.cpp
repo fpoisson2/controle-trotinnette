@@ -1028,7 +1028,7 @@ void loop() {
 #if LTE_ENABLED
     if (_wsUseLte) {
         static uint32_t lastWifiScan = 0;
-        if (millis() - lastWifiScan > 60000) {
+        if (millis() - lastWifiScan > 300000) {  // 5 min = ~8600 req/mois (gratuit Google)
             lastWifiScan = millis();
             // Activer WiFi brièvement pour scanner
             WiFi.mode(WIFI_STA);

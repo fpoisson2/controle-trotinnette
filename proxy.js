@@ -1398,9 +1398,11 @@ esp32Wss.on('connection', (ws) => {
           if (otaResolve) otaResolve(msg);
 
         } else if (msg.type === 'wifi_scan') {
-          // Géolocalisation WiFi — envoyer les APs à Google Geolocation API
+          // Géolocalisation WiFi — seulement si pas de fix GPS précis
+          const entry = scooters.get(scooterId);
+          const hasGpsFix = entry && entry.telemetry.gps_fix === 'ok';
           const geoKey = process.env.GOOGLE_GEOLOCATION_KEY;
-          if (geoKey && msg.aps && msg.aps.length > 0) {
+          if (geoKey && msg.aps && msg.aps.length > 0 && !hasGpsFix) {
             const body = {
               wifiAccessPoints: msg.aps.map(ap => ({
                 macAddress: ap.mac,
