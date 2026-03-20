@@ -852,9 +852,12 @@ void setup() {
     wsProxy.beginSSL(PROXY_HOST, PROXY_PORT, "/ws-esp32");
     wsProxy.onEvent(onWsProxyEvent);
     wsProxy.setReconnectInterval(5000);  // 5s entre les tentatives de reconnexion
-    // Heartbeat conservateur pour LTE — détecte les connexions mortes
-    // Ping/60s, pong timeout 30s, déconnexion après 3 ratés (= ~150s max avant détection)
-    wsProxy.enableHeartbeat(60000, 30000, 3);
+    // Pas de heartbeat WebSocket en LTE : TinyGSM ne lit pas les pongs assez vite.
+    // La détection de connexion morte se fait via le silence timeout (120s)
+    // dans WebSocketsNetworkClientSecure::available()
+    if (!_wsUseLte) {
+        wsProxy.enableHeartbeat(15000, 5000, 2);  // heartbeat WiFi seulement
+    }
     wsLog("[ws-proxy] connexion vers wss://%s/ws-esp32\n", PROXY_HOST);
 
     // Tâche capture + wsProxy sur Core 1

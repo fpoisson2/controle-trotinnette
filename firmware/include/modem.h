@@ -184,6 +184,11 @@ static bool modemConnect() {
     extern volatile int _lteRssiCache;
     _lteRssiCache = -113 + (sq * 2);
 
+    // Activer le report automatique du signal (URC +CSQ: rssi,ber)
+    // Le modem envoie une URC quand le signal change — pas besoin de poll AT+CSQ
+    _modem.sendAT("+AUTOCSQ=1,1");
+    _modem.waitResponse();
+
     // Connexion GPRS avec l'APN
     Serial.printf("[modem] gprsConnect APN='%s'...\n", LTE_APN);
     if (!_modem.gprsConnect(LTE_APN, "", "")) {

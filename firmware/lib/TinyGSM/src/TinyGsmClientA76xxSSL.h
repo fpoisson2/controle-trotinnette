@@ -923,6 +923,15 @@ class TinyGsmA76xxSSL : public TinyGsmA76xx<TinyGsmA76xxSSL>,
             sockets[cchMux]->got_data = true;
           }
           data = "";
+        } else if (data.endsWith(GF("+CSQ:"))) {
+          // URC signal automatique (AT+AUTOCSQ) — mettre à jour le cache RSSI
+          int rssiVal = streamGetIntBefore(',');
+          streamSkipUntil('\n');
+          if (rssiVal >= 0 && rssiVal <= 31) {
+            extern volatile int _lteRssiCache;
+            _lteRssiCache = -113 + (rssiVal * 2);
+          }
+          data = "";
         } else if (data.endsWith(GF("+CCH_PEER_CLOSED:"))) {
           int8_t mux = streamGetIntBefore('\n');
           if (mux >= 0 && mux < TINY_GSM_MUX_COUNT && sockets[mux]) {

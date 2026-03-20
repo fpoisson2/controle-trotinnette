@@ -323,34 +323,32 @@ static void musicToggle() {
 // la musique se met en pause automatiquement.
 
 // Pré-remplir le ring buffer avec des samples de la note courante
-// Génère ~10ms de samples à chaque appel (240 samples à 24kHz)
-#define MUSIC_SAMPLES_PER_TICK  240
+// Génère ~100ms de samples par appel (2400 samples à 24kHz)
+#define MUSIC_SAMPLES_PER_TICK  2400
 
 static void musicTick(bool pttActive) {
     if (!_musicPlaying) return;
 
-    // ── Pause automatique si l'IA parle ou si PTT actif ──────────────────
-    bool aiSpeaking = (dacHead != dacTail) && !dacMusicMode;
-    if (aiSpeaking || pttActive) {
+    // ── Pause automatique si PTT actif ──────────────────────────────────
+    // (la coexistence voix IA / musique est gérée par le ring buffer :
+    //  la voix IA écrase les données musique quand elle arrive)
+    if (pttActive) {
         if (!_musicPaused) {
             _musicPaused = true;
-            dacMusicMode = false;
         }
         return;
     }
-    // Reprendre automatiquement si la pause était due à l'IA/PTT
-    if (_musicPaused && !aiSpeaking && !pttActive) {
+    if (_musicPaused && !pttActive) {
         _musicPaused = false;
         _noteStartMs = millis();
         _musicPhase  = 0.0f;
     }
 
     if (_musicPaused) return;
-    dacMusicMode = true;  // Signaler à l'ISR qu'on gère le DAC
 
-    // ── Ne pas surcharger le buffer — garder ~50ms d'avance max ──────────
+    // ── Garder ~500ms d'avance dans le buffer pour absorber les pauses de loop() ──
     uint32_t buffered = (dacHead - dacTail + DAC_RING_SIZE) & DAC_RING_MASK;
-    if (buffered > SPK_SAMPLE_RATE / 10) return;  // déjà ~100ms en buffer
+    if (buffered > SPK_SAMPLE_RATE / 2) return;  // déjà ~500ms en buffer
 
     // ── Vérifier si la note courante est terminée ────────────────────────
     if (_noteIndex >= _noteCount) {

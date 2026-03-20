@@ -1238,6 +1238,25 @@ function updateSpeedometer(speed) {
   document.getElementById('val-speed-m').textContent = Math.round(speed);
 }
 
+function updateSignalBars(rssi) {
+  // rssi en dBm : -113 (aucun) à -51 (excellent)
+  // Convertir en 0-4 barres
+  let bars = 0;
+  if (rssi > -70) bars = 4;
+  else if (rssi > -85) bars = 3;
+  else if (rssi > -100) bars = 2;
+  else if (rssi > -110) bars = 1;
+  ['signal-bars', 'signal-bars-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const spans = el.querySelectorAll('.sbar');
+    spans.forEach((s, i) => {
+      s.style.opacity = (i < bars) ? '1' : '0.25';
+      s.style.background = bars <= 1 ? '#f44' : bars <= 2 ? '#fa0' : '#4f4';
+    });
+  });
+}
+
 function updatePill(id, idM, value, decimals) {
   const text = value.toFixed(decimals);
   const el = document.getElementById(id); if (el) el.textContent = text;
@@ -1249,7 +1268,7 @@ function applyTelemetry(data) {
   if (data.voltage !== undefined) updatePill('val-voltage', 'val-voltage-m', data.voltage, 1);
   if (data.current !== undefined) updatePill('val-current', 'val-current-m', data.current, 1);
   if (data.temp    !== undefined) updatePill('val-temp',    'val-temp-m',    data.temp,    0);
-  if (data.rssi !== undefined) updatePill('val-rssi', 'val-rssi-m', data.rssi, 0);
+  if (data.rssi !== undefined) updateSignalBars(data.rssi);
   if (data.conn !== undefined) {
     const el = document.getElementById('val-conn'); if (el) el.textContent = data.conn;
     const elM = document.getElementById('val-conn-m'); if (elM) elM.textContent = data.conn;
