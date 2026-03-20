@@ -597,6 +597,8 @@ static void sendTelemetry() {
     // Ajouter type pour que le proxy sache que c'est de la télémétrie
     doc["type"] = "telemetry";
     doc["locked"] = scooterLocked;
+    doc["rssi"] = connGetRSSI();
+    doc["conn"] = connGetTypeName();
 
     char buf[320];
     serializeJson(doc, buf, sizeof(buf));

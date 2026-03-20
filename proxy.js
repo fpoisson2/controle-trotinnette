@@ -146,7 +146,7 @@ function getScooterList() {
 
 function getSelectedTelemetry() {
   const selected = getSelectedScooter();
-  return selected ? selected.telemetry : { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0 };
+  return selected ? selected.telemetry : { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0, rssi: -999, conn: 'Aucun' };
 }
 
 // ─── Broadcast vers navigateurs (SSE) + trottinette sélectionnée (WS) ──────
@@ -1329,7 +1329,7 @@ esp32Wss.on('connection', (ws) => {
           scooterId = msg.mac || `esp32-${Date.now()}`;
           scooters.set(scooterId, {
             ws,
-            telemetry: { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0 },
+            telemetry: { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0, rssi: -999, conn: 'Aucun' },
             fwVersion: msg.version || null,
             debugMode: false,
             connectedAt: Date.now(),

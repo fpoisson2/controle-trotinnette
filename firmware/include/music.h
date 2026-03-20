@@ -23,11 +23,16 @@
 #if MUSIC_ENABLED
 
 // ── Déclarations externes (depuis audio.h) ──────────────────────────────────
-// Le ring buffer DAC est déclaré dans audio.h — on vérifie s'il est vide
-// pour savoir si l'IA parle (et donc mettre la musique en pause)
+// Le ring buffer DAC — musique y écrit des samples, l'ISR les joue à 24kHz
+extern volatile uint8_t  dacRing[];
 extern volatile uint32_t dacHead;
 extern volatile uint32_t dacTail;
 extern volatile bool dacMusicMode;
+#define DAC_RING_SIZE  32768
+#define DAC_RING_MASK  (DAC_RING_SIZE - 1)
+
+// Phase continue de l'oscillateur musique
+static float _musicPhase = 0.0f;
 
 // ── Structure d'une note parsée ─────────────────────────────────────────────
 struct MusicNote {
@@ -266,7 +271,7 @@ static void musicPlay(uint8_t trackIndex) {
 static void musicPause() {
     if (_musicPlaying) {
         _musicPaused = true;
-        dac_output_voltage(DAC_CHANNEL_1, 128); // silence
+        dacMusicMode = false;
     }
 }
 
@@ -281,8 +286,8 @@ static void musicStop() {
     _musicPlaying = false;
     _musicPaused  = false;
     _noteIndex    = 0;
-    dacMusicMode  = false;  // Rendre le contrôle du DAC à l'ISR
-    dac_output_voltage(DAC_CHANNEL_1, 128); // silence
+    dacMusicMode  = false;
+    _musicPhase   = 0.0f;
 }
 
 static void musicNext() {
@@ -311,21 +316,25 @@ static void musicToggle() {
 }
 
 // ── musicTick() — appeler dans loop() ───────────────────────────────────────
-// Génère le son de la note courante via le DAC et avance quand la durée est
-// écoulée. Non-bloquant : une itération prend < 1 µs si pas de note à jouer.
+// Génère des samples dans le ring buffer DAC (joués par l'ISR timer à 24kHz).
+// Plus de sautillement : l'ISR assure un débit constant, indépendant de loop().
 //
-// Coexistence IA : si le ring buffer DAC contient des données (voix IA),
+// Coexistence IA : si le ring buffer DAC contient des données voix IA,
 // la musique se met en pause automatiquement.
+
+// Pré-remplir le ring buffer avec des samples de la note courante
+// Génère ~10ms de samples à chaque appel (240 samples à 24kHz)
+#define MUSIC_SAMPLES_PER_TICK  240
 
 static void musicTick(bool pttActive) {
     if (!_musicPlaying) return;
 
     // ── Pause automatique si l'IA parle ou si PTT actif ──────────────────
-    bool aiSpeaking = (dacHead != dacTail);
+    bool aiSpeaking = (dacHead != dacTail) && !dacMusicMode;
     if (aiSpeaking || pttActive) {
         if (!_musicPaused) {
             _musicPaused = true;
-            dac_output_voltage(DAC_CHANNEL_1, 128);
+            dacMusicMode = false;
         }
         return;
     }
@@ -333,16 +342,22 @@ static void musicTick(bool pttActive) {
     if (_musicPaused && !aiSpeaking && !pttActive) {
         _musicPaused = false;
         _noteStartMs = millis();
+        _musicPhase  = 0.0f;
     }
 
     if (_musicPaused) return;
+    dacMusicMode = true;  // Signaler à l'ISR qu'on gère le DAC
+
+    // ── Ne pas surcharger le buffer — garder ~50ms d'avance max ──────────
+    uint32_t buffered = (dacHead - dacTail + DAC_RING_SIZE) & DAC_RING_MASK;
+    if (buffered > SPK_SAMPLE_RATE / 10) return;  // déjà ~100ms en buffer
 
     // ── Vérifier si la note courante est terminée ────────────────────────
     if (_noteIndex >= _noteCount) {
-        // Fin de la piste — boucler
-        _noteIndex   = 0;
-        _noteStartMs = millis();
+        _noteIndex    = 0;
+        _noteStartMs  = millis();
         _trackStartMs = millis();
+        _musicPhase   = 0.0f;
         return;
     }
 
@@ -350,31 +365,38 @@ static void musicTick(bool pttActive) {
     uint32_t elapsed = millis() - _noteStartMs;
 
     if (elapsed >= note.duration) {
-        // Passer à la note suivante
         _noteIndex++;
         _noteStartMs = millis();
-
-        // Petit silence inter-notes (5ms) pour séparer les notes identiques
-        dac_output_voltage(DAC_CHANNEL_1, 128);
+        _musicPhase  = 0.0f;
+        // Silence inter-notes : quelques samples à 128
+        for (int i = 0; i < SPK_SAMPLE_RATE / 200 && // ~5ms
+             ((dacHead + 1) & DAC_RING_MASK) != dacTail; i++) {
+            dacRing[dacHead] = 128;
+            dacHead = (dacHead + 1) & DAC_RING_MASK;
+        }
         return;
     }
 
-    // ── Générer le son de la note courante ───────────────────────────────
-    if (note.freq == 0) {
-        // Silence (pause dans la mélodie)
-        dac_output_voltage(DAC_CHANNEL_1, 128);
-    } else {
-        // Onde carrée via DAC
-        // On utilise micros() pour une précision sub-milliseconde
-        uint32_t periodUs = 1000000UL / note.freq;
-        uint32_t halfPeriod = periodUs / 2;
-        uint32_t phase = micros() % periodUs;
+    // ── Générer des samples dans le ring buffer ──────────────────────────
+    const float phaseInc = (note.freq > 0) ? (float)note.freq / SPK_SAMPLE_RATE : 0.0f;
 
-        if (phase < halfPeriod) {
-            dac_output_voltage(DAC_CHANNEL_1, 160); // haut (réduit pour éviter saturation)
+    for (int i = 0; i < MUSIC_SAMPLES_PER_TICK; i++) {
+        // Vérifier qu'il y a de la place
+        uint32_t next = (dacHead + 1) & DAC_RING_MASK;
+        if (next == dacTail) break;  // buffer plein
+
+        uint8_t sample;
+        if (note.freq == 0) {
+            sample = 128;  // silence
         } else {
-            dac_output_voltage(DAC_CHANNEL_1, 96);  // bas
+            // Onde carrée douce (légèrement arrondie pour réduire les harmoniques)
+            float phase01 = _musicPhase - (int)_musicPhase;  // 0.0 à 1.0
+            sample = (phase01 < 0.5f) ? 160 : 96;
+            _musicPhase += phaseInc;
         }
+
+        dacRing[dacHead] = sample;
+        dacHead = next;
     }
 }
 
