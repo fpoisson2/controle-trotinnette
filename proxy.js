@@ -151,20 +151,12 @@ function getSelectedTelemetry() {
 
 // ─── Broadcast vers navigateurs (SSE) + trottinette sélectionnée (WS) ──────
 
-// Buffer audio pour l'ESP : accumule les chunks base64 pendant AUDIO_BATCH_MS
-// puis envoie un seul gros message — réduit le overhead TCP/TLS sur LTE
-const AUDIO_BATCH_MS = 300;  // ms d'accumulation avant envoi
-let audioBatchBuf = '';
-let audioBatchTimer = null;
-
-function flushAudioBatch() {
-  audioBatchTimer = null;
-  if (!audioBatchBuf) return;
+// Envoyer l'audio resampleé à l'ESP (appelé depuis le handler OpenAI)
+function sendAudioToEsp(b64_8k) {
   const selected = getSelectedScooter();
   if (selected && selected.ws.readyState === WebSocket.OPEN) {
-    try { selected.ws.send(JSON.stringify({ type: 'audio', data: audioBatchBuf })); } catch (_) {}
+    try { selected.ws.send(JSON.stringify({ type: 'audio', data: b64_8k })); } catch (_) {}
   }
-  audioBatchBuf = '';
 }
 
 function broadcastSSE(obj) {
@@ -173,21 +165,12 @@ function broadcastSSE(obj) {
     try { client.write(payload); } catch (_) { /* client déconnecté */ }
   }
   // Envoyer à la trottinette SEULEMENT les messages qu'elle traite
-  const espTypes = new Set(['cmd', 'audio', 'lock', 'music', 'debug', 'ota_begin', 'ota_end']);
+  // (audio est géré séparément via sendAudioToEsp avec resampling)
+  const espTypes = new Set(['cmd', 'lock', 'music', 'debug', 'ota_begin', 'ota_end']);
   if (espTypes.has(obj.type)) {
-    if (obj.type === 'audio') {
-      // Accumuler l'audio et envoyer par lot pour LTE
-      audioBatchBuf += obj.data;
-      if (!audioBatchTimer) {
-        audioBatchTimer = setTimeout(flushAudioBatch, AUDIO_BATCH_MS);
-      }
-    } else {
-      // Flush audio immédiatement si un autre type de message arrive (cmd, lock...)
-      if (audioBatchBuf) { clearTimeout(audioBatchTimer); flushAudioBatch(); }
-      const selected = getSelectedScooter();
-      if (selected && selected.ws.readyState === WebSocket.OPEN) {
-        try { selected.ws.send(JSON.stringify(obj)); } catch (_) {}
-      }
+    const selected = getSelectedScooter();
+    if (selected && selected.ws.readyState === WebSocket.OPEN) {
+      try { selected.ws.send(JSON.stringify(obj)); } catch (_) {}
     }
   }
 }
@@ -366,12 +349,9 @@ function connectOpenAI() {
           const ssePayload = `data: ${JSON.stringify({ type: 'audio', data: b64.slice(i, i + CHUNK) })}\n\n`;
           for (const c of sseClients) { try { c.write(ssePayload); } catch (_) {} }
         }
-        // Envoyer le 8kHz resampleé à l'ESP via le batch buffer
+        // Envoyer le 8kHz resampleé directement à l'ESP (chunk par chunk)
         const b64_8k = pcm8.toString('base64');
-        audioBatchBuf += b64_8k;
-        if (!audioBatchTimer) {
-          audioBatchTimer = setTimeout(flushAudioBatch, AUDIO_BATCH_MS);
-        }
+        sendAudioToEsp(b64_8k);
         break;
       }
 
