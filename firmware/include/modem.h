@@ -32,6 +32,25 @@ extern TinyGsmClientSecure  _modemClientSSL;
 static bool _modemInitialized = false;
 static bool _modemConnected   = false;
 
+// ── Cache GPS (mis à jour par NMEA URC dans TinyGSM + reconnexions) ──────────
+volatile float _gpsLat = 0.0f;
+volatile float _gpsLon = 0.0f;
+volatile bool  _gpsValid = false;
+
+static void modemUpdateGPS() {
+    if (!_modemInitialized) return;
+    uint8_t status = 0;
+    float lat = 0, lon = 0;
+    if (_modem.getGPS(&status, &lat, &lon)) {
+        if (lat != 0.0f || lon != 0.0f) {
+            _gpsLat = lat;
+            _gpsLon = lon;
+            _gpsValid = true;
+            Serial.printf("[gps] position : %.6f, %.6f\n", lat, lon);
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  modemInit() — Allumer le modem via PWRKEY et initialiser les commandes AT
 //
@@ -205,6 +224,37 @@ static bool modemConnect() {
     _modemConnected = true;
     String ip = _modem.getLocalIP();
     Serial.printf("[modem] connecté — IP : %s\n", ip.c_str());
+
+    // Activer le GPS (GNSS) + NMEA automatique sur le port AT
+    // Les trames NMEA ($GPRMC) seront parsées comme URC par TinyGSM
+    Serial.println("[modem] activation GPS...");
+    // Position approximative par triangulation cellulaire (Cell-ID)
+    // Disponible immédiatement, précision ~100-500m
+    Serial.println("[modem] localisation cellulaire...");
+    {
+        float lat = 0, lon = 0, acc = 0;
+        if (_modem.getGsmLocation(&lat, &lon, &acc)) {
+            _gpsLat = lat;
+            _gpsLon = lon;
+            _gpsValid = true;
+            Serial.printf("[modem] position Cell-ID : %.6f, %.6f (±%.0fm)\n", lat, lon, acc);
+        } else {
+            Serial.println("[modem] Cell-ID non disponible");
+        }
+    }
+
+    // Activer le GPS (GNSS) pour position précise — remplacera la Cell-ID
+    Serial.println("[modem] activation GPS...");
+    if (_modem.enableGPS()) {
+        Serial.println("[modem] GPS activé");
+        // Report automatique toutes les 10s via URC +CGNSSINFO:
+        _modem.sendAT("+CGNSSINFO=10");
+        _modem.waitResponse();
+        Serial.println("[modem] GPS report auto 10s activé");
+    } else {
+        Serial.println("[modem] GPS non disponible");
+    }
+
     return true;
 }
 

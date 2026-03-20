@@ -460,7 +460,17 @@ static void taskCapture(void *) {
                 _modem.sendAT("+CCHSTOP");
                 _modem.waitResponse(3000);
                 delay(500);
+                // Profiter de la pause SSL pour lire signal + position Cell-ID
                 connUpdateLteRSSI();
+                // Cell-ID : position approx sans GPS
+                {
+                    float lat = 0, lon = 0, acc = 0;
+                    if (_modem.getGsmLocation(&lat, &lon, &acc)) {
+                        if (lat != 0 || lon != 0) {
+                            _gpsLat = lat; _gpsLon = lon; _gpsValid = true;
+                        }
+                    }
+                }
                 _modem.sendAT("+CCHSTART");
                 _modem.waitResponse(3000);
             }
@@ -595,7 +605,8 @@ static void sendTelemetry() {
         doc["current"] = escData.motorCurrent;
         doc["temp"]    = escData.tempFet;
     }
-    doc["lat"] = 0.0f; doc["lon"] = 0.0f;
+    doc["lat"] = _gpsValid ? _gpsLat : 0.0f;
+    doc["lon"] = _gpsValid ? _gpsLon : 0.0f;
 #endif
     // Ajouter type pour que le proxy sache que c'est de la télémétrie
     doc["type"] = "telemetry";

@@ -924,12 +924,54 @@ class TinyGsmA76xxSSL : public TinyGsmA76xx<TinyGsmA76xxSSL>,
           }
           data = "";
         } else if (data.endsWith(GF("+CSQ:"))) {
-          // URC signal automatique (AT+AUTOCSQ) — mettre à jour le cache RSSI
+          // URC signal automatique (AT+AUTOCSQ)
           int rssiVal = streamGetIntBefore(',');
           streamSkipUntil('\n');
           if (rssiVal >= 0 && rssiVal <= 31) {
             extern volatile int _lteRssiCache;
             _lteRssiCache = -113 + (rssiVal * 2);
+          }
+          data = "";
+        } else if (data.endsWith(GF("+CGNSSINFO:"))) {
+          // URC GPS auto : +CGNSSINFO: mode,sat,lat,N/S,lon,E/W,date,utc,alt,speed,course
+          String info = stream.readStringUntil('\n');
+          info.trim();
+          // Parser — champs séparés par ','
+          // ex: 2,08,4649.123456,N,07120.654321,W,200326,150000.0,100.0,0.5,0.0
+          if (info.length() > 10 && info.indexOf(",,,,") < 0) {
+            int c1 = info.indexOf(',');                    // après mode
+            int c2 = info.indexOf(',', c1 + 1);           // après sat
+            int c3 = info.indexOf(',', c2 + 1);           // après lat
+            int c4 = info.indexOf(',', c3 + 1);           // après N/S
+            int c5 = info.indexOf(',', c4 + 1);           // après lon
+            int c6 = info.indexOf(',', c5 + 1);           // après E/W
+            if (c6 > 0) {
+              String sLat = info.substring(c1 + 1, c2);   // sat count... wait
+              // Actually: field0=mode, field1=sat, field2=lat, field3=N/S, field4=lon, field5=E/W
+              String sSat = info.substring(c1 + 1, c2);
+              String sLat2 = info.substring(c2 + 1, c3);
+              String sNS  = info.substring(c3 + 1, c4);
+              String sLon = info.substring(c4 + 1, c5);
+              String sEW  = info.substring(c5 + 1, c6);
+              if (sLat2.length() > 0 && sLon.length() > 0) {
+                float rawLat = sLat2.toFloat();
+                int dLat = (int)(rawLat / 100);
+                float lat = dLat + (rawLat - dLat * 100) / 60.0f;
+                if (sNS == "S") lat = -lat;
+                float rawLon = sLon.toFloat();
+                int dLon = (int)(rawLon / 100);
+                float lon = dLon + (rawLon - dLon * 100) / 60.0f;
+                if (sEW == "W") lon = -lon;
+                if (lat != 0 || lon != 0) {
+                  extern volatile float _gpsLat;
+                  extern volatile float _gpsLon;
+                  extern volatile bool  _gpsValid;
+                  _gpsLat = lat;
+                  _gpsLon = lon;
+                  _gpsValid = true;
+                }
+              }
+            }
           }
           data = "";
         } else if (data.endsWith(GF("+CCH_PEER_CLOSED:"))) {
