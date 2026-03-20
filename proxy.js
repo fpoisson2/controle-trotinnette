@@ -150,18 +150,44 @@ function getSelectedTelemetry() {
 }
 
 // ─── Broadcast vers navigateurs (SSE) + trottinette sélectionnée (WS) ──────
+
+// Buffer audio pour l'ESP : accumule les chunks base64 pendant AUDIO_BATCH_MS
+// puis envoie un seul gros message — réduit le overhead TCP/TLS sur LTE
+const AUDIO_BATCH_MS = 300;  // ms d'accumulation avant envoi
+let audioBatchBuf = '';
+let audioBatchTimer = null;
+
+function flushAudioBatch() {
+  audioBatchTimer = null;
+  if (!audioBatchBuf) return;
+  const selected = getSelectedScooter();
+  if (selected && selected.ws.readyState === WebSocket.OPEN) {
+    try { selected.ws.send(JSON.stringify({ type: 'audio', data: audioBatchBuf })); } catch (_) {}
+  }
+  audioBatchBuf = '';
+}
+
 function broadcastSSE(obj) {
   const payload = `data: ${JSON.stringify(obj)}\n\n`;
   for (const client of sseClients) {
     try { client.write(payload); } catch (_) { /* client déconnecté */ }
   }
   // Envoyer à la trottinette SEULEMENT les messages qu'elle traite
-  // (pas les transcripts, scooter_list, ota_build, etc. — trop de données pour LTE)
   const espTypes = new Set(['cmd', 'audio', 'lock', 'music', 'debug', 'ota_begin', 'ota_end']);
   if (espTypes.has(obj.type)) {
-    const selected = getSelectedScooter();
-    if (selected && selected.ws.readyState === WebSocket.OPEN) {
-      try { selected.ws.send(JSON.stringify(obj)); } catch (_) {}
+    if (obj.type === 'audio') {
+      // Accumuler l'audio et envoyer par lot pour LTE
+      audioBatchBuf += obj.data;
+      if (!audioBatchTimer) {
+        audioBatchTimer = setTimeout(flushAudioBatch, AUDIO_BATCH_MS);
+      }
+    } else {
+      // Flush audio immédiatement si un autre type de message arrive (cmd, lock...)
+      if (audioBatchBuf) { clearTimeout(audioBatchTimer); flushAudioBatch(); }
+      const selected = getSelectedScooter();
+      if (selected && selected.ws.readyState === WebSocket.OPEN) {
+        try { selected.ws.send(JSON.stringify(obj)); } catch (_) {}
+      }
     }
   }
 }
@@ -313,13 +339,38 @@ function connectOpenAI() {
         break;
       }
 
-      // Delta audio de la réponse (GA et beta) — envoyé en morceaux de 4096 chars
+      // Delta audio de la réponse (GA et beta)
+      // Resample 24kHz → 8kHz (1 sample sur 3) pour réduire le débit LTE ×3
       case 'response.output_audio.delta':
       case 'response.audio.delta': {
         const b64 = event.delta ?? '';
+        // Décoder base64 → PCM16 24kHz
+        const pcm24 = Buffer.from(b64, 'base64');
+        const nSamples = Math.floor(pcm24.length / 2);
+        // Downsampler 3:1 (24kHz → 8kHz) + convertir 16→8 bits unsigned
+        // Le DAC ESP32 est 8 bits — inutile d'envoyer 16 bits sur LTE
+        // Débit : 48 KB/s → 8 KB/s (÷6)
+        const nOut = Math.floor(nSamples / 3);
+        const pcm8 = Buffer.alloc(nOut);
+        for (let i = 0; i < nOut; i++) {
+          const s0 = pcm24.readInt16LE(i * 6);
+          const s1 = pcm24.readInt16LE(i * 6 + 2);
+          const s2 = pcm24.readInt16LE(i * 6 + 4);
+          // Moyenne + conversion signed 16→unsigned 8 (>> 8 puis +128)
+          const avg = Math.round((s0 + s1 + s2) / 3);
+          pcm8[i] = Math.max(0, Math.min(255, (avg >> 8) + 128));
+        }
+        // Envoyer en base64 au dashboard (24kHz original)
         const CHUNK = 4096;
         for (let i = 0; i < b64.length; i += CHUNK) {
-          broadcastSSE({ type: 'audio', data: b64.slice(i, i + CHUNK) });
+          const ssePayload = `data: ${JSON.stringify({ type: 'audio', data: b64.slice(i, i + CHUNK) })}\n\n`;
+          for (const c of sseClients) { try { c.write(ssePayload); } catch (_) {} }
+        }
+        // Envoyer le 8kHz resampleé à l'ESP via le batch buffer
+        const b64_8k = pcm8.toString('base64');
+        audioBatchBuf += b64_8k;
+        if (!audioBatchTimer) {
+          audioBatchTimer = setTimeout(flushAudioBatch, AUDIO_BATCH_MS);
         }
         break;
       }

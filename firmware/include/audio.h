@@ -202,14 +202,47 @@ inline void audioBeepProxyOk()   { audioBeep(330.0f, 30); audioBeep(500.0f, 30);
 inline void audioBeepProxyLost() { audioBeep(660.0f, 30); audioBeep(400.0f, 30); audioBeep(220.0f, 50); }
 
 // ── Décoder base64 et enqueue dans le ring buffer DAC ────────────────────────
-// Buffer statique : les chunks base64 font max 4096 chars → ~3072 bytes PCM
+// Le proxy envoie du PCM8 unsigned 8kHz (déjà au format DAC) — écriture directe
 static uint8_t b64DecodeBuf[4096];
 
+inline void dacEnqueueRaw(const uint8_t *data, size_t count) {
+    // Attendre de la place en bloc (max 50 ms)
+    uint32_t avail = (dacTail - dacHead - 1 + DAC_RING_SIZE) & DAC_RING_MASK;
+    if (avail < count) {
+        uint32_t waited = 0;
+        while (avail < count && waited < 50) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            waited++;
+            avail = (dacTail - dacHead - 1 + DAC_RING_SIZE) & DAC_RING_MASK;
+        }
+    }
+    avail = (dacTail - dacHead - 1 + DAC_RING_SIZE) & DAC_RING_MASK;
+    size_t toWrite = count;
+    if (toWrite > avail) toWrite = avail;
+    for (size_t i = 0; i < toWrite; i++) {
+        // Appliquer le gain de volume
+        int32_t val = ((int32_t)data[i] - 128) * (int32_t)(VOLUME_GAIN);
+        val = val + 128;
+        if (val > 255) val = 255;
+        if (val < 0) val = 0;
+        dacRing[dacHead] = (uint8_t)val;
+        dacHead = (dacHead + 1) & DAC_RING_MASK;
+    }
+}
+
 inline void audioPushBase64(const char *b64, size_t b64Len) {
-    size_t outLen = 0;
-    int rc = mbedtls_base64_decode(b64DecodeBuf, sizeof(b64DecodeBuf), &outLen,
-                                   (const unsigned char *)b64, b64Len);
-    if (rc == 0 && outLen > 0) {
-        dacEnqueue(b64DecodeBuf, outLen);
+    // Découper en blocs de 4 chars (quantum base64) pour supporter les gros payloads
+    const size_t BLOCK = 4096;
+    for (size_t offset = 0; offset < b64Len; offset += BLOCK) {
+        size_t chunkLen = b64Len - offset;
+        if (chunkLen > BLOCK) chunkLen = BLOCK;
+        if (offset + chunkLen < b64Len) chunkLen &= ~3;
+        size_t outLen = 0;
+        int rc = mbedtls_base64_decode(b64DecodeBuf, sizeof(b64DecodeBuf), &outLen,
+                                       (const unsigned char *)(b64 + offset), chunkLen);
+        if (rc == 0 && outLen > 0) {
+            // Données PCM8 unsigned — écriture directe au ring buffer DAC
+            dacEnqueueRaw(b64DecodeBuf, outLen);
+        }
     }
 }
