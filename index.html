@@ -783,6 +783,7 @@
           <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:75%;border-radius:1px"></span>
           <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:100%;border-radius:1px"></span>
         </span>
+        <span id="gps-status" style="margin-left:6px;font-size:0.7em;color:#fa0">Cell</span>
       </div>
     </div>
 
@@ -886,6 +887,7 @@
           <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:75%;border-radius:1px"></span>
           <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:100%;border-radius:1px"></span>
         </span>
+        <span id="gps-status-m" style="margin-left:6px;font-size:0.7em;color:#fa0">Cell</span>
       </div>
     </div>
   </div>
@@ -1141,15 +1143,19 @@ let selectedScooterIdLocal = null;
 
 // ── Carte ────────────────────────────────────────────────────────────────────
 function makeScooterIcon(color = '#00f8ce') {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="${color}" stroke="#fff" stroke-width="0.5">
-    <circle cx="6" cy="19" r="2.5" fill="none" stroke="${color}" stroke-width="1.5"/>
-    <circle cx="18" cy="19" r="2.5" fill="none" stroke="${color}" stroke-width="1.5"/>
-    <path d="M18 19V8l-4-3H9l-1 4h5l2 2v8" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <line x1="14" y1="5" x2="16" y2="3" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/>
+  // Icône trottinette électrique — guidon + deck + roues
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">
+    <circle cx="18" cy="18" r="16" fill="${color}22" stroke="${color}" stroke-width="1.5"/>
+    <circle cx="11" cy="26" r="3" fill="none" stroke="${color}" stroke-width="1.8"/>
+    <circle cx="25" cy="26" r="3" fill="none" stroke="${color}" stroke-width="1.8"/>
+    <line x1="25" y1="26" x2="23" y2="12" stroke="${color}" stroke-width="2" stroke-linecap="round"/>
+    <line x1="23" y1="12" x2="20" y2="8" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>
+    <line x1="17" y1="8" x2="23" y2="8" stroke="${color}" stroke-width="2" stroke-linecap="round"/>
+    <line x1="11" y1="26" x2="22" y2="24" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>
   </svg>`;
   return L.divIcon({
     html: svg,
-    iconSize: [28, 28], iconAnchor: [14, 14],
+    iconSize: [36, 36], iconAnchor: [18, 18],
     className: ''
   });
 }
@@ -1272,6 +1278,13 @@ function applyTelemetry(data) {
   if (data.conn !== undefined) {
     const el = document.getElementById('val-conn'); if (el) el.textContent = data.conn;
     const elM = document.getElementById('val-conn-m'); if (elM) elM.textContent = data.conn;
+  }
+  if (data.gps_fix !== undefined) {
+    const ok = data.gps_fix === 'ok';
+    ['gps-status', 'gps-status-m'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) { el.textContent = ok ? 'GPS' : 'Cell'; el.style.color = ok ? '#4f4' : '#fa0'; }
+    });
   }
   if (data.lat !== undefined && data.lon !== undefined) updateMapPos(data.lat, data.lon);
 }

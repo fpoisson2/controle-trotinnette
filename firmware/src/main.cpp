@@ -607,6 +607,7 @@ static void sendTelemetry() {
     }
     doc["lat"] = _gpsValid ? _gpsLat : 0.0f;
     doc["lon"] = _gpsValid ? _gpsLon : 0.0f;
+    doc["gps_fix"] = _gpsValid ? "ok" : "none";
 #endif
     // Ajouter type pour que le proxy sache que c'est de la télémétrie
     doc["type"] = "telemetry";
@@ -1020,6 +1021,44 @@ void loop() {
     // ── Lecteur de musique : tick non-bloquant ───────────────────────────────
 #if MUSIC_ENABLED
     musicTick(voiceActive);
+#endif
+
+    // ── Scan WiFi périodique pour géolocalisation (toutes les 60s) ─────────
+    // Le scan utilise le radio WiFi ESP32, pas le modem LTE — aucun conflit
+#if LTE_ENABLED
+    if (_wsUseLte) {
+        static uint32_t lastWifiScan = 0;
+        if (millis() - lastWifiScan > 60000) {
+            lastWifiScan = millis();
+            // Activer WiFi brièvement pour scanner
+            WiFi.mode(WIFI_STA);
+            int n = WiFi.scanNetworks(false, false, false, 300);
+            if (n > 0) {
+                // Construire JSON avec les top 10 APs (BSSID + RSSI)
+                JsonDocument wdoc;
+                wdoc["type"] = "wifi_scan";
+                JsonArray aps = wdoc["aps"].to<JsonArray>();
+                for (int i = 0; i < min(n, 10); i++) {
+                    JsonObject ap = aps.add<JsonObject>();
+                    ap["mac"] = WiFi.BSSIDstr(i);
+                    ap["rssi"] = WiFi.RSSI(i);
+                    ap["ch"] = WiFi.channel(i);
+                }
+                char buf[512];
+                serializeJson(wdoc, buf, sizeof(buf));
+                // Envoyer via le buffer partagé (Core 1 envoie)
+                // On utilise la queue de logs car le buffer télémétrie est occupé
+                uint8_t next = (logHead + 1) % LOG_QUEUE_SIZE;
+                if (next != logTail) {
+                    strncpy(logQueue[logHead], buf, LOG_MSG_SIZE - 1);
+                    logQueue[logHead][LOG_MSG_SIZE - 1] = '\0';
+                    logHead = next;
+                }
+            }
+            WiFi.scanDelete();
+            WiFi.mode(WIFI_OFF);
+        }
+    }
 #endif
 
     // Reconnexion WiFi : backoff exponentiel 2s → 4s → 8s → … → 30s max, reboot après 20 échecs

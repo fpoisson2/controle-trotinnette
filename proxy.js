@@ -1397,6 +1397,37 @@ esp32Wss.on('connection', (ws) => {
         } else if (msg.type === 'ota_result') {
           if (otaResolve) otaResolve(msg);
 
+        } else if (msg.type === 'wifi_scan') {
+          // Géolocalisation WiFi — envoyer les APs à Google Geolocation API
+          const geoKey = process.env.GOOGLE_GEOLOCATION_KEY;
+          if (geoKey && msg.aps && msg.aps.length > 0) {
+            const body = {
+              wifiAccessPoints: msg.aps.map(ap => ({
+                macAddress: ap.mac,
+                signalStrength: ap.rssi,
+                channel: ap.ch
+              }))
+            };
+            fetch(`https://www.googleapis.com/geolocation/v1/geolocate?key=${geoKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            }).then(r => r.json()).then(data => {
+              if (data.location) {
+                console.log(`[wifi-geo] ${scooterId}: ${data.location.lat}, ${data.location.lng} (±${data.accuracy}m)`);
+                const entry = scooters.get(scooterId);
+                if (entry) {
+                  entry.telemetry.lat = data.location.lat;
+                  entry.telemetry.lon = data.location.lng;
+                  entry.telemetry.gps_fix = `wifi±${Math.round(data.accuracy)}m`;
+                  broadcastSSE({ type: 'telemetry', scooterId,
+                    lat: data.location.lat, lon: data.location.lng,
+                    gps_fix: entry.telemetry.gps_fix });
+                }
+              }
+            }).catch(err => console.error(`[wifi-geo] erreur: ${err.message}`));
+          }
+
         } else if (msg.type === 'lock_ack') {
           console.log(`[lock] ${scooterId} confirme: ${msg.locked ? 'verrouillée' : 'déverrouillée'}`);
           const entry = scooters.get(scooterId);
