@@ -175,11 +175,14 @@ static bool modemConnect() {
     }
     Serial.println("[modem] réseau trouvé");
 
-    // Debug : afficher opérateur et signal avant connexion
+    // Afficher opérateur et signal + mettre à jour le cache RSSI
     String op = _modem.getOperator();
     Serial.printf("[modem] opérateur : %s\n", op.c_str());
     int16_t sq = _modem.getSignalQuality();
     Serial.printf("[modem] signal : %d/31\n", sq);
+    // Initialiser le cache RSSI (_lteRssiCache déclaré dans connectivity.h)
+    extern volatile int _lteRssiCache;
+    _lteRssiCache = -113 + (sq * 2);
 
     // Connexion GPRS avec l'APN
     Serial.printf("[modem] gprsConnect APN='%s'...\n", LTE_APN);

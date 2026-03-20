@@ -775,8 +775,14 @@
       <div class="pill" style="--pill-color: var(--temp)">
         <span class="pill-value" id="val-temp">0</span><span class="pill-unit">&deg;C</span>
       </div>
-      <div class="pill" style="--pill-color: #6cb4ee">
-        <span class="pill-value" id="val-rssi">--</span><span class="pill-unit">dBm</span>
+      <div class="pill" style="--pill-color: #6cb4ee" title="Signal LTE">
+        <span class="pill-value" id="val-conn">--</span>
+        <span id="signal-bars" style="display:inline-flex;gap:1px;align-items:flex-end;height:14px;margin-left:4px">
+          <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:25%;border-radius:1px"></span>
+          <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:50%;border-radius:1px"></span>
+          <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:75%;border-radius:1px"></span>
+          <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:100%;border-radius:1px"></span>
+        </span>
       </div>
     </div>
 
@@ -872,8 +878,14 @@
       <div class="pill" style="--pill-color: var(--temp)">
         <span class="pill-value" id="val-temp-m">0</span><span class="pill-unit">&deg;C</span>
       </div>
-      <div class="pill" style="--pill-color: #6cb4ee">
-        <span class="pill-value" id="val-rssi-m">--</span><span class="pill-unit">dBm</span>
+      <div class="pill" style="--pill-color: #6cb4ee" title="Signal LTE">
+        <span class="pill-value" id="val-conn-m">--</span>
+        <span id="signal-bars-m" style="display:inline-flex;gap:1px;align-items:flex-end;height:14px;margin-left:4px">
+          <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:25%;border-radius:1px"></span>
+          <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:50%;border-radius:1px"></span>
+          <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:75%;border-radius:1px"></span>
+          <span class="sbar" style="width:3px;background:#fff;opacity:0.25;height:100%;border-radius:1px"></span>
+        </span>
       </div>
     </div>
   </div>
@@ -1237,7 +1249,11 @@ function applyTelemetry(data) {
   if (data.voltage !== undefined) updatePill('val-voltage', 'val-voltage-m', data.voltage, 1);
   if (data.current !== undefined) updatePill('val-current', 'val-current-m', data.current, 1);
   if (data.temp    !== undefined) updatePill('val-temp',    'val-temp-m',    data.temp,    0);
-  if (data.rssi    !== undefined) updatePill('val-rssi',    'val-rssi-m',    data.rssi,    0);
+  if (data.rssi !== undefined) updatePill('val-rssi', 'val-rssi-m', data.rssi, 0);
+  if (data.conn !== undefined) {
+    const el = document.getElementById('val-conn'); if (el) el.textContent = data.conn;
+    const elM = document.getElementById('val-conn-m'); if (elM) elM.textContent = data.conn;
+  }
   if (data.lat !== undefined && data.lon !== undefined) updateMapPos(data.lat, data.lon);
 }
 

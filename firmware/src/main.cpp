@@ -454,16 +454,19 @@ static void taskCapture(void *) {
 #if LTE_ENABLED
         if (_wsUseLte && !wsProxyConnected) {
             static uint32_t lastSslReset = 0;
-            if (millis() - lastSslReset > 10000) {  // pas plus d'un reset/10s
+            if (millis() - lastSslReset > 10000) {
                 lastSslReset = millis();
                 Serial.println("[ws-lte] reset SSL modem (CCHSTOP+CCHSTART)");
                 _modem.sendAT("+CCHSTOP");
                 _modem.waitResponse(3000);
                 delay(500);
+                connUpdateLteRSSI();
                 _modem.sendAT("+CCHSTART");
                 _modem.waitResponse(3000);
             }
         }
+        // RSSI LTE : mis à jour uniquement lors des reconnexions (AT+CSQ
+        // pendant que le SSL est connecté corrompt le flux AT → déconnexion)
 #endif
 
         // Envoyer télémétrie en attente (écrit par Core0, envoyé ici sur Core1)

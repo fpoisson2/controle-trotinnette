@@ -239,8 +239,8 @@ static void connSetType(ConnType t) {
 //  WiFi : RSSI en dBm (typiquement -30 à -90)
 //  LTE  : qualité signal 0-31 convertie en pseudo-dBm
 // ─────────────────────────────────────────────────────────────────────────────
-// Cache RSSI LTE (mis à jour par Core 1 via connUpdateLteRSSI)
-static volatile int _lteRssiCache = -999;
+// Cache RSSI LTE (mis à jour par modemConnect + reconnexion SSL)
+volatile int _lteRssiCache = -999;
 
 static int connGetRSSI() {
     switch (_connType) {
