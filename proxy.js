@@ -1536,6 +1536,12 @@ esp32Wss.on('connection', (ws) => {
       if (entry && entry.chainedPending) {
         entry.chainedPending = false;
         console.log(`[chained] blob reçu: ${data.length} bytes de ${scooterId}`);
+        // Relayer le blob aux clients debug-audio (monitor micro)
+        for (const c of debugAudioClients) {
+          if (c.readyState === WebSocket.OPEN) {
+            try { c.send(data, { binary: true }); } catch (_) {}
+          }
+        }
         if (scooterId === selectedScooterId) {
           processChainedAudio(scooterId, Buffer.from(data));
         }
