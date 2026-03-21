@@ -285,6 +285,7 @@
     display: flex; align-items: center; justify-content: center;
     user-select: none; -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
     transition: all 0.2s;
     position: relative; z-index: 1;
   }
@@ -437,7 +438,7 @@
   .sheet-pills {
     display: none;
     position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
-    z-index: 200;
+    z-index: 1100;
     background: var(--surface-raised);
     border: 1px solid var(--border);
     border-radius: 24px;
@@ -455,6 +456,7 @@
     cursor: pointer;
     transition: all 0.2s;
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
   .sheet-pill.active {
     background: var(--accent);
@@ -463,15 +465,16 @@
 
   /* ── Bottom sheet ── */
   .bottom-sheet-overlay {
-    position: fixed; inset: 0; z-index: 150;
+    position: fixed; inset: 0; z-index: 1000;
     background: rgba(0,0,0,0.5);
     opacity: 0; pointer-events: none;
     transition: opacity 0.3s;
+    -webkit-tap-highlight-color: transparent;
   }
   .bottom-sheet-overlay.visible { opacity: 1; pointer-events: auto; }
   .bottom-sheet {
     position: fixed; bottom: 0; left: 0; right: 0;
-    z-index: 160;
+    z-index: 1050;
     background: var(--surface);
     border-top-left-radius: 20px;
     border-top-right-radius: 20px;
@@ -707,8 +710,14 @@
       /* Contenir les z-index internes de Leaflet pour eviter que la carte passe au-dessus des bottom sheets */
       isolation: isolate;
       z-index: 0;
+      contain: layout;
     }
     .mobile-map #map { width: 100%; height: 100%; }
+
+    /* Desactiver les interactions carte quand un bottom sheet est ouvert */
+    body.sheet-active .mobile-map {
+      pointer-events: none;
+    }
 
     .mobile-ptt-section {
       display: flex; flex-direction: column;
@@ -1226,6 +1235,7 @@ function toggleSheet(name) {
   if (sheet) {
     overlay.classList.add('visible');
     sheet.classList.add('open');
+    document.body.classList.add('sheet-active');
   }
   document.querySelectorAll('.sheet-pill').forEach(p => {
     p.classList.toggle('active', p.dataset.sheet === name);
@@ -1237,6 +1247,7 @@ function closeSheet() {
   document.getElementById('sheet-overlay').classList.remove('visible');
   document.querySelectorAll('.bottom-sheet').forEach(s => s.classList.remove('open'));
   document.querySelectorAll('.sheet-pill').forEach(p => p.classList.remove('active'));
+  document.body.classList.remove('sheet-active');
 }
 
 // ── Settings dropdown ────────────────────────────────────────────────────────
@@ -1894,6 +1905,8 @@ async function startRecording() {
       return;
     }
     if (!audioCtx) audioCtx = new AudioContext({ sampleRate: 16000 });
+    // Reprendre l'AudioContext si suspendu (politique autoplay mobile)
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
     const source = audioCtx.createMediaStreamSource(mediaStream);
     processor = audioCtx.createScriptProcessor(AUDIO_CHUNK, 1, 1);
@@ -2296,14 +2309,22 @@ PTT_IDS.forEach(id => {
   const btn = document.getElementById(id); if (!btn) return;
   let touchHandled = false;
   // touchstart : empecher le scroll/zoom et le menu contextuel sur mobile
-  btn.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
+  btn.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Reprendre l'AudioContext suspendu (requis par les navigateurs mobiles)
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }, { passive: false });
   btn.addEventListener('touchend', (e) => {
     e.preventDefault();
+    e.stopPropagation();
     touchHandled = true;
     toggleRecording();
     // Reset apres un court delai pour ne pas bloquer les clics desktop
     setTimeout(() => { touchHandled = false; }, 400);
   }, { passive: false });
+  // Empecher le menu contextuel (appui long sur mobile)
+  btn.addEventListener('contextmenu', (e) => { e.preventDefault(); });
   // click : uniquement si pas deja traite par touch (evite double-toggle sur mobile)
   btn.addEventListener('click', (e) => {
     e.preventDefault();
