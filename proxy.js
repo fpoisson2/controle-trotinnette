@@ -1108,9 +1108,24 @@ async function buildAndStoreRelease(release) {
     );
     fs.writeFileSync(configPath, configContent);
 
-    // Compiler avec PlatformIO
+    // Installer les libs d'abord, puis patcher WebSockets avec le header custom
     broadcastSSE({ type: 'ota_build', step: 'compile', msg: `Compilation v${release.version}...` });
     console.log(`[build] compilation v${release.version}...`);
+
+    // Pré-installer les dépendances pour pouvoir patcher avant la compilation
+    try {
+      execSync('pio pkg install -e esp32dev', { cwd: srcDir, timeout: 120000, stdio: 'pipe' });
+    } catch (_) { /* ignore — pio run installera aussi */ }
+
+    // Copier le header custom WebSockets dans les libdeps
+    const customHeader = path.join(srcDir, 'include', 'WebSocketsNetworkClientSecure.h');
+    if (fs.existsSync(customHeader)) {
+      const libdepsWs = path.join(srcDir, '.pio', 'libdeps', 'esp32dev', 'WebSockets', 'src');
+      if (fs.existsSync(libdepsWs)) {
+        fs.copyFileSync(customHeader, path.join(libdepsWs, 'WebSocketsNetworkClientSecure.h'));
+        console.log('[build] header WebSocketsNetworkClientSecure.h copié dans libdeps');
+      }
+    }
 
     await new Promise((resolve, reject) => {
       const proc = spawn('pio', ['run', '-e', 'esp32dev'], {
