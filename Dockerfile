@@ -28,8 +28,15 @@ COPY fleet.js .
 COPY index.html .
 COPY landing.html .
 
-# config.h est monté en volume via docker-compose.yml
-RUN mkdir -p firmware/include
+# Copier les sources firmware pour les builds OTA
+# config.h est exclu (contient des credentials) — monté en volume au runtime
+COPY firmware/ firmware/
+RUN rm -f firmware/include/config.h
+# Installer les dépendances PlatformIO du projet (lib + toolchain)
+RUN cd firmware && pio pkg install -e esp32dev 2>/dev/null || true
+# Copier le header custom WebSockets dans la lib installée
+RUN find /root/.platformio -path "*/WebSockets/src" -type d 2>/dev/null | head -1 | \
+    xargs -I{} cp firmware/include/WebSocketsNetworkClientSecure.h {} 2>/dev/null || true
 # Répertoire pour stocker les .bin pré-compilés
 RUN mkdir -p builds
 # Répertoire pour les données persistantes (SQLite, fleet.json)

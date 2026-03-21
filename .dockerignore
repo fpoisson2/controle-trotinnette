@@ -1,6 +1,7 @@
 node_modules
 firmware/.pio
 firmware/__pycache__
+firmware/include/config.h
 .git
 .github
 .env
