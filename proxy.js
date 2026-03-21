@@ -1637,7 +1637,11 @@ esp32Wss.on('connection', (ws) => {
             const now = Date.now();
             if (!entry._lastDbLog || now - entry._lastDbLog > 30000) {
               entry._lastDbLog = now;
-              try { logTelemetry(scooterId, entry.telemetry); } catch (_) {}
+              try {
+                logTelemetry(scooterId, entry.telemetry);
+              } catch (dbErr) {
+                console.error('[db] erreur logTelemetry:', dbErr.message);
+              }
             }
             // Relayer aux clients SSE avec l'ID de la trottinette
             const payload = `data: ${JSON.stringify({ type: 'telemetry', scooterId, ...fields })}\n\n`;
@@ -1685,7 +1689,12 @@ esp32Wss.on('connection', (ws) => {
                   entry.telemetry.lon = data.location.lng;
                   entry.telemetry.gps_fix = `wifi±${Math.round(data.accuracy)}m`;
                   // Persister la position WiFi en BD
-                  try { logTelemetry(scooterId, entry.telemetry); } catch (_) {}
+                  try {
+                    logTelemetry(scooterId, entry.telemetry);
+                    console.log(`[wifi-geo] position persistée en BD`);
+                  } catch (dbErr) {
+                    console.error('[db] erreur logTelemetry wifi-geo:', dbErr.message);
+                  }
                   broadcastSSE({ type: 'telemetry', scooterId,
                     lat: data.location.lat, lon: data.location.lng,
                     gps_fix: entry.telemetry.gps_fix });
