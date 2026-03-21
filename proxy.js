@@ -151,6 +151,11 @@ function getSelectedTelemetry() {
 
 // ─── Broadcast vers navigateurs (SSE) + trottinette sélectionnée (WS) ──────
 
+// ── Source audio : navigateur ou ESP ? ───────────────────────────────────────
+// Si l'audio vient du navigateur, la réponse joue dans le navigateur (SSE)
+// Si l'audio vient de l'ESP (PTT), la réponse va à l'ESP (binaire)
+let audioFromEsp = false;
+
 // ── Audio vers ESP : binaire PCM8 8kHz, accumulé par lots ───────────────────
 // Le modem LTE met ~1.5s par message WebSocket. On accumule ~1.5s de son
 // pour que chaque message contienne assez d'audio pour couvrir le gap.
@@ -501,17 +506,18 @@ function connectOpenAI() {
       case 'response.output_audio.delta':
       case 'response.audio.delta': {
         const b64 = event.delta ?? '';
-        // Décoder base64 → PCM16 24kHz → PCM8 8kHz
-        const pcm24 = Buffer.from(b64, 'base64');
-        const pcm8 = resample24to8(pcm24);
         // Envoyer en base64 au dashboard (24kHz original)
         const CHUNK = 4096;
         for (let i = 0; i < b64.length; i += CHUNK) {
           const ssePayload = `data: ${JSON.stringify({ type: 'audio', data: b64.slice(i, i + CHUNK) })}\n\n`;
           for (const c of sseClients) { try { c.write(ssePayload); } catch (_) {} }
         }
-        // Envoyer le PCM8 brut en binaire à l'ESP (accumulé par lots)
-        sendAudioToEsp(pcm8);
+        // Envoyer à l'ESP seulement si l'audio vient du PTT ESP (pas du navigateur)
+        if (audioFromEsp) {
+          const pcm24 = Buffer.from(b64, 'base64');
+          const pcm8 = resample24to8(pcm24);
+          sendAudioToEsp(pcm8);
+        }
         break;
       }
 
@@ -800,8 +806,9 @@ app.get('/stream', (req, res) => {
   });
 });
 
-// ── POST /audio — gardé pour compatibilité (ESP32 utilise maintenant /ws-esp32)
+// ── POST /audio — audio depuis le navigateur (micro web)
 app.post('/audio', async (req, res) => {
+  audioFromEsp = false;  // réponse audio → navigateur seulement
   const chunk = req.body;
   if (!USE_LOCAL_AI && openaiWs && openaiWs.readyState === WebSocket.OPEN) {
     openaiWs.send(JSON.stringify({
@@ -1537,6 +1544,7 @@ esp32Wss.on('connection', (ws) => {
 
       // Mode streaming (WiFi) : audio PCM vers OpenAI Realtime
       if (scooterId === selectedScooterId) {
+        audioFromEsp = true;  // réponse audio → ESP
         if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
           openaiWs.send(JSON.stringify({
             type: 'input_audio_buffer.append',
