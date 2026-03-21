@@ -221,7 +221,6 @@ inline void dacEnqueueRaw(const uint8_t *data, size_t count) {
     size_t toWrite = count;
     if (toWrite > avail) toWrite = avail;
     for (size_t i = 0; i < toWrite; i++) {
-        // Appliquer le gain de volume
         int32_t val = ((int32_t)data[i] - 128) * (int32_t)(VOLUME_GAIN);
         val = val + 128;
         if (val > 255) val = 255;
