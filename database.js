@@ -254,7 +254,12 @@ function logTelemetry(scooterId, data) {
 function getTelemetryHistory(scooterId, { limit = 100, since } = {}) {
   let sql = 'SELECT * FROM telemetry_log WHERE scooter_id = ?';
   const params = [scooterId];
-  if (since) { sql += ' AND created_at >= ?'; params.push(since); }
+  if (since) {
+    // Convertir ISO string (2026-03-21T20:32:00.000Z) en format SQLite (2026-03-21 20:32:00)
+    const sqliteSince = since.replace('T', ' ').replace(/\.\d+Z$/, '').replace('Z', '');
+    sql += ' AND created_at >= ?';
+    params.push(sqliteSince);
+  }
   sql += ' ORDER BY created_at DESC LIMIT ?';
   params.push(Math.min(limit, 1000));
   return db.prepare(sql).all(...params);
