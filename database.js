@@ -80,7 +80,34 @@ function initDB() {
       details     TEXT,
       created_at  TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS telemetry_log (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      scooter_id  TEXT NOT NULL,
+      lat         REAL,
+      lon         REAL,
+      speed       REAL,
+      voltage     REAL,
+      current     REAL,
+      temp        REAL,
+      rssi        INTEGER,
+      gps_fix     TEXT,
+      locked      INTEGER,
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_telemetry_scooter_time
+      ON telemetry_log(scooter_id, created_at DESC);
   `);
+
+  // Migration : ajouter colonnes position à scooters si absentes
+  const cols = db.prepare("PRAGMA table_info(scooters)").all().map(c => c.name);
+  if (!cols.includes('last_lat')) {
+    db.exec(`ALTER TABLE scooters ADD COLUMN last_lat REAL`);
+    db.exec(`ALTER TABLE scooters ADD COLUMN last_lon REAL`);
+    db.exec(`ALTER TABLE scooters ADD COLUMN last_gps_fix TEXT`);
+    console.log('[db] colonnes position ajoutées à scooters');
+  }
 
   console.log('[db] tables créées/vérifiées');
 
@@ -203,6 +230,50 @@ function getAuditLog({ limit = 100 } = {}) {
   ).all(Math.min(limit, 500));
 }
 
+// ─── Télémétrie (historique + dernière position) ─────────────────────────────
+function logTelemetry(scooterId, data) {
+  db.prepare(
+    `INSERT INTO telemetry_log (scooter_id, lat, lon, speed, voltage, current, temp, rssi, gps_fix, locked)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    scooterId,
+    data.lat || null, data.lon || null,
+    data.speed || null, data.voltage || null,
+    data.current || null, data.temp || null,
+    data.rssi || null, data.gps_fix || null,
+    data.locked ? 1 : 0
+  );
+  // Mettre à jour la dernière position connue
+  if (data.lat && data.lon && data.lat !== 0 && data.lon !== 0) {
+    db.prepare(
+      `UPDATE scooters SET last_lat = ?, last_lon = ?, last_gps_fix = ?, last_seen = datetime('now') WHERE id = ?`
+    ).run(data.lat, data.lon, data.gps_fix || null, scooterId);
+  }
+}
+
+function getTelemetryHistory(scooterId, { limit = 100, since } = {}) {
+  let sql = 'SELECT * FROM telemetry_log WHERE scooter_id = ?';
+  const params = [scooterId];
+  if (since) { sql += ' AND created_at >= ?'; params.push(since); }
+  sql += ' ORDER BY created_at DESC LIMIT ?';
+  params.push(Math.min(limit, 1000));
+  return db.prepare(sql).all(...params);
+}
+
+function getLastPosition(scooterId) {
+  return db.prepare(
+    'SELECT last_lat, last_lon, last_gps_fix, last_seen FROM scooters WHERE id = ?'
+  ).get(scooterId);
+}
+
+// Purger les vieilles données (garder 7 jours par défaut)
+function purgeTelemetry(daysToKeep = 7) {
+  const result = db.prepare(
+    `DELETE FROM telemetry_log WHERE created_at < datetime('now', '-' || ? || ' days')`
+  ).run(daysToKeep);
+  if (result.changes > 0) console.log(`[db] ${result.changes} entrées télémétrie purgées (>${daysToKeep}j)`);
+}
+
 module.exports = {
   initDB,
   getDB,
@@ -219,5 +290,9 @@ module.exports = {
   getRides,
   getActiveRides: getActiveRidesDB,
   addAuditLog,
-  getAuditLog
+  getAuditLog,
+  logTelemetry,
+  getTelemetryHistory,
+  getLastPosition,
+  purgeTelemetry
 };

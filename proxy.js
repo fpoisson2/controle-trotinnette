@@ -14,7 +14,7 @@ const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
 
 // ─── Modules ajoutés ──────────────────────────────────────────────────────────
-const { initDB, registerScooter: dbRegisterScooter, updateScooterStatus, createRide: dbCreateRide, endRide: dbEndRide, addAuditLog } = require('./database');
+const { initDB, registerScooter: dbRegisterScooter, updateScooterStatus, createRide: dbCreateRide, endRide: dbEndRide, addAuditLog, logTelemetry, getTelemetryHistory, getLastPosition, purgeTelemetry } = require('./database');
 const authRoutes = require('./auth-routes');
 const { requireAuth: authRequireAuth, requireRole } = require('./auth-routes');
 const fleetRouter = require('./fleet');
@@ -895,6 +895,19 @@ app.get('/api/rides/active', (req, res) => {
   res.json(activeRides);
 });
 
+// ── Historique de télémétrie ─────────────────────────────────────────────────
+app.get('/api/telemetry/:scooterId', (req, res) => {
+  const { scooterId } = req.params;
+  const limit = parseInt(req.query.limit) || 100;
+  const since = req.query.since || null;  // ISO date string
+  try {
+    const history = getTelemetryHistory(scooterId, { limit, since });
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Monter les routes de flotte (requièrent auth via le routeur interne) ──
 // Injecter les dépendances du proxy dans le routeur fleet
 fleetRouter._getLiveScooters = () => scooters;
@@ -1409,6 +1422,18 @@ esp32Wss.on('connection', (ws) => {
           if (!selectedScooterId) selectedScooterId = scooterId;
           console.log(`[esp32-ws] enregistré: ${scooterId} (FW ${msg.version}) — verrouillée`);
 
+          // Restaurer la dernière position connue depuis la BD
+          try {
+            const lastPos = getLastPosition(scooterId);
+            if (lastPos && lastPos.last_lat && lastPos.last_lon) {
+              const entry = scooters.get(scooterId);
+              entry.telemetry.lat = lastPos.last_lat;
+              entry.telemetry.lon = lastPos.last_lon;
+              entry.telemetry.gps_fix = lastPos.last_gps_fix || 'db';
+              console.log(`[esp32-ws] position restaurée: ${lastPos.last_lat}, ${lastPos.last_lon}`);
+            }
+          } catch (_) {}
+
           // Enregistrer dans fleet.json et base SQLite
           try {
             fleetRegisterOnConnect(scooterId, msg.version || null);
@@ -1450,6 +1475,12 @@ esp32Wss.on('connection', (ws) => {
           if (entry) {
             const { type, ...fields } = msg;
             entry.telemetry = { ...entry.telemetry, ...fields };
+            // Persister en BD (throttle : 1 écriture par 30s par trottinette)
+            const now = Date.now();
+            if (!entry._lastDbLog || now - entry._lastDbLog > 30000) {
+              entry._lastDbLog = now;
+              try { logTelemetry(scooterId, entry.telemetry); } catch (_) {}
+            }
             // Relayer aux clients SSE avec l'ID de la trottinette
             const payload = `data: ${JSON.stringify({ type: 'telemetry', scooterId, ...fields })}\n\n`;
             for (const c of sseClients) { try { c.write(payload); } catch (_) {} }
@@ -1495,6 +1526,8 @@ esp32Wss.on('connection', (ws) => {
                   entry.telemetry.lat = data.location.lat;
                   entry.telemetry.lon = data.location.lng;
                   entry.telemetry.gps_fix = `wifi±${Math.round(data.accuracy)}m`;
+                  // Persister la position WiFi en BD
+                  try { logTelemetry(scooterId, entry.telemetry); } catch (_) {}
                   broadcastSSE({ type: 'telemetry', scooterId,
                     lat: data.location.lat, lon: data.location.lng,
                     gps_fix: entry.telemetry.gps_fix });
@@ -1571,6 +1604,10 @@ server.listen(PORT, () => {
   console.log(`[build] ${builds.length} build(s) pré-compilé(s) en cache`);
   setTimeout(pollAndBuild, 10000); // 10s après le démarrage
   setInterval(pollAndBuild, POLL_INTERVAL_MS);
+
+  // Purger la télémétrie ancienne (>7 jours) au démarrage puis toutes les 24h
+  purgeTelemetry(7);
+  setInterval(() => purgeTelemetry(7), 24 * 60 * 60 * 1000);
 });
 
 if (!USE_LOCAL_AI) connectOpenAI();
