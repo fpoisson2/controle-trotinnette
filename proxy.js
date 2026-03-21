@@ -151,10 +151,10 @@ function getSelectedTelemetry() {
 
 // ─── Broadcast vers navigateurs (SSE) + trottinette sélectionnée (WS) ──────
 
-// ── Audio vers ESP : binaire PCM8 8kHz, accumulé par petits lots ────────────
-// Chaque OpenAI delta (~170 samples 8kHz = 21ms) est trop petit pour un message
-// On accumule ~200ms puis on envoie en binaire brut (pas de JSON/base64)
-const AUDIO_FLUSH_MS = 200;
+// ── Audio vers ESP : binaire PCM8 8kHz, accumulé par lots ───────────────────
+// Le modem LTE met ~1.5s par message WebSocket. On accumule ~1.5s de son
+// pour que chaque message contienne assez d'audio pour couvrir le gap.
+const AUDIO_FLUSH_MS = 1500;
 let audioAccum = [];
 let audioAccumBytes = 0;
 let audioFlushTimer = null;
@@ -174,8 +174,8 @@ function flushAudioToEsp() {
 function sendAudioToEsp(pcm8buf) {
   audioAccum.push(pcm8buf);
   audioAccumBytes += pcm8buf.length;
-  // Flush si assez accumulé (~1600 bytes = 200ms à 8kHz) ou par timer
-  if (audioAccumBytes >= 1600) {
+  // Flush si assez accumulé (~12000 bytes = 1.5s à 8kHz) ou par timer
+  if (audioAccumBytes >= 12000) {
     if (audioFlushTimer) { clearTimeout(audioFlushTimer); audioFlushTimer = null; }
     flushAudioToEsp();
   } else if (!audioFlushTimer) {
