@@ -774,10 +774,12 @@
     <span class="dot" id="dot-ai" title="IA"></span>
     <span class="ind-label">IA</span>
   </div>
-  <button class="hdr-btn" id="play-btn" onclick="togglePlay()" title="Demarrer/Arreter">
-    <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-      <polygon points="5,3 19,12 5,21"/>
+  <button class="hdr-btn" id="play-btn" onclick="togglePlay()" title="Demarrer/Arreter"
+    style="background:var(--green);border-color:var(--green);color:#000;padding:6px 14px;border-radius:20px;min-width:36px">
+    <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="width:18px;height:18px">
+      <polygon points="6,3 20,12 6,21"/>
     </svg>
+    <span id="play-label" style="font-size:11px;font-weight:700;letter-spacing:0.05em">GO</span>
   </button>
   <span id="ride-timer" style="font-size:11px;color:var(--green);display:none;font-weight:700"></span>
   <span class="mode-badge" id="mode-badge" style="display:none">CLOUD</span>
@@ -1842,19 +1844,22 @@ async function togglePlay() {
 function updatePlayBtn() {
   const btn = document.getElementById('play-btn');
   const icon = document.getElementById('play-icon');
+  const label = document.getElementById('play-label');
   if (!btn || !icon) return;
   if (activeRideId) {
-    // Stop icon (carre)
     icon.innerHTML = '<rect x="4" y="4" width="16" height="16" rx="2"/>';
+    btn.style.background = 'var(--red)';
     btn.style.borderColor = 'var(--red)';
-    btn.style.color = 'var(--red)';
+    btn.style.color = '#fff';
     btn.title = 'Arreter la course';
+    if (label) label.textContent = 'STOP';
   } else {
-    // Play icon (triangle)
-    icon.innerHTML = '<polygon points="5,3 19,12 5,21"/>';
+    icon.innerHTML = '<polygon points="6,3 20,12 6,21"/>';
+    btn.style.background = 'var(--green)';
     btn.style.borderColor = 'var(--green)';
-    btn.style.color = 'var(--green)';
+    btn.style.color = '#000';
     btn.title = 'Demarrer une course';
+    if (label) label.textContent = 'GO';
   }
 }
 
