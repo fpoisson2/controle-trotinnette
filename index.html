@@ -2536,7 +2536,8 @@ function buildHistoryTableHtml(entries) {
     <th>Heure</th><th>Vitesse</th><th>Tension</th><th>Temp</th><th>Position</th><th>GPS</th>
   </tr></thead><tbody>`;
   for (const e of entries) {
-    const t = new Date(e.created_at);
+    // SQLite stocke en UTC sans 'Z' — l'ajouter pour que JS parse correctement
+    const t = new Date(e.created_at + (e.created_at.endsWith('Z') ? '' : 'Z'));
     const time = `${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
     const date = `${pad(t.getDate())}/${pad(t.getMonth()+1)}`;
     const timestamp = historyPeriod === '7d' ? `${date} ${time}` : time;
