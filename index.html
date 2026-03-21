@@ -498,6 +498,80 @@
     flex: 1; overflow-y: auto; padding: 0 20px 24px;
   }
 
+  /* ── Onglets panneau droit ── */
+  .right-tabs {
+    display: flex; border-bottom: 1px solid var(--border);
+    background: var(--surface); flex-shrink: 0;
+  }
+  .right-tab {
+    flex: 1; padding: 10px 12px;
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--muted); font-size: 12px; font-weight: 700;
+    font-family: 'Inter', system-ui, sans-serif;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .right-tab:hover { color: var(--text); }
+  .right-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .right-panel { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+  .right-panel.active { display: flex; }
+
+  /* ── Historique telemetrie ── */
+  .history-toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px; flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .history-filter-btn {
+    background: none; border: 1px solid var(--border);
+    color: var(--muted); font-size: 11px; font-weight: 700;
+    font-family: 'Inter', system-ui, sans-serif;
+    padding: 5px 10px; border-radius: 16px;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .history-filter-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .history-filter-btn.active { background: var(--accent); color: #121212; border-color: var(--accent); }
+  .history-refresh-btn {
+    background: var(--surface-raised); border: 1px solid var(--border);
+    color: var(--text); font-size: 11px; font-weight: 700;
+    font-family: 'Inter', system-ui, sans-serif;
+    padding: 5px 12px; border-radius: var(--radius);
+    cursor: pointer; transition: all 0.2s;
+    margin-left: auto;
+  }
+  .history-refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .history-refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .history-trail-toggle {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11px; color: var(--muted); font-weight: 600;
+    cursor: pointer; user-select: none;
+  }
+  .history-trail-toggle input { accent-color: var(--accent); cursor: pointer; }
+  .history-table-wrap {
+    flex: 1; overflow-y: auto; padding: 0;
+  }
+  .history-table {
+    width: 100%; border-collapse: collapse; font-size: 12px;
+  }
+  .history-table thead { position: sticky; top: 0; z-index: 1; }
+  .history-table th {
+    background: var(--surface-raised); color: var(--muted);
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; padding: 8px 10px; text-align: left;
+    border-bottom: 1px solid var(--border); white-space: nowrap;
+  }
+  .history-table td {
+    padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .history-table tr:hover td { background: rgba(255,255,255,0.03); }
+  .history-table .gps-ok { color: var(--green); }
+  .history-table .gps-no { color: var(--muted); }
+  .history-status {
+    text-align: center; padding: 20px; color: var(--muted); font-size: 12px;
+  }
+
   /* ── Carte ── */
   .leaflet-container { background: #1a1a1a !important; }
 
@@ -630,6 +704,9 @@
     .mobile-map {
       width: 100%; height: 30vh; min-height: 180px;
       position: relative;
+      /* Contenir les z-index internes de Leaflet pour eviter que la carte passe au-dessus des bottom sheets */
+      isolation: isolate;
+      z-index: 0;
     }
     .mobile-map #map { width: 100%; height: 100%; }
 
@@ -688,13 +765,11 @@
     <span class="dot" id="dot-ai" title="IA"></span>
     <span class="ind-label">IA</span>
   </div>
-  <button class="hdr-btn" id="lock-btn" onclick="toggleLock()" title="Verrouiller/Deverrouiller">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+  <button class="hdr-btn" id="play-btn" onclick="togglePlay()" title="Demarrer/Arreter">
+    <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <polygon points="5,3 19,12 5,21"/>
     </svg>
   </button>
-  <button class="hdr-btn" id="ride-btn" onclick="toggleRide()" title="Demarrer/Terminer une course" style="display:none;font-size:11px">COURSE</button>
   <span id="ride-timer" style="font-size:11px;color:var(--green);display:none;font-weight:700"></span>
   <span class="mode-badge" id="mode-badge" style="display:none">CLOUD</span>
   <button class="hdr-btn" id="theme-btn" onclick="toggleTheme()" title="Mode clair/sombre">
@@ -845,8 +920,38 @@
       <div id="map-desktop"></div>
     </div>
     <div class="log-area">
-      <div class="panel-title">Journal vocal</div>
-      <div class="voice-log" id="voice-log-desktop"></div>
+      <div class="right-tabs">
+        <button class="right-tab active" data-panel="panel-log" onclick="switchRightTab(this)">Journal</button>
+        <button class="right-tab" data-panel="panel-history" onclick="switchRightTab(this)">Historique</button>
+        <button class="right-tab" data-panel="panel-debug" onclick="switchRightTab(this)">Debug</button>
+      </div>
+      <div class="right-panel active" id="panel-log">
+        <div class="voice-log" id="voice-log-desktop"></div>
+      </div>
+      <div class="right-panel" id="panel-debug">
+        <div style="padding:6px;display:flex;gap:6px;align-items:center;border-bottom:1px solid var(--border)">
+          <label style="font-size:11px;display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="debug-mode-toggle" onchange="toggleDebugMode(this.checked)"> Mode debug
+          </label>
+          <button class="history-refresh-btn" onclick="clearDebugLog()">Vider</button>
+        </div>
+        <div class="voice-log" id="debug-log-panel" style="font-family:monospace;font-size:11px"></div>
+      </div>
+      <div class="right-panel" id="panel-history">
+        <div class="history-toolbar">
+          <button class="history-filter-btn active" data-period="1h" onclick="setHistoryFilter(this)">1h</button>
+          <button class="history-filter-btn" data-period="6h" onclick="setHistoryFilter(this)">6h</button>
+          <button class="history-filter-btn" data-period="24h" onclick="setHistoryFilter(this)">24h</button>
+          <button class="history-filter-btn" data-period="7d" onclick="setHistoryFilter(this)">7j</button>
+          <label class="history-trail-toggle">
+            <input type="checkbox" id="trail-toggle" checked onchange="toggleHistoryTrail(this.checked)"> Tracé
+          </label>
+          <button class="history-refresh-btn" id="history-refresh-btn" onclick="loadTelemetryHistory()">Actualiser</button>
+        </div>
+        <div class="history-table-wrap" id="history-table-wrap">
+          <div class="history-status" id="history-status">Cliquer sur Actualiser pour charger l'historique</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -915,6 +1020,7 @@
 <div class="sheet-pills" id="sheet-pills">
   <button class="sheet-pill" data-sheet="control" onclick="toggleSheet('control')">Controle</button>
   <button class="sheet-pill" data-sheet="log" onclick="toggleSheet('log')">Journal</button>
+  <button class="sheet-pill" data-sheet="history" onclick="toggleSheet('history')">Historique</button>
   <button class="sheet-pill" data-sheet="debug" onclick="toggleSheet('debug')">Debug</button>
 </div>
 
@@ -948,6 +1054,27 @@
   <div class="sheet-title">Journal vocal</div>
   <div class="sheet-body" style="padding:0">
     <div class="voice-log" id="voice-log" style="max-height:50vh"></div>
+  </div>
+</div>
+
+<!-- Bottom sheet: Historique -->
+<div class="bottom-sheet" id="sheet-history">
+  <div class="sheet-handle"></div>
+  <div class="sheet-title">Historique telemetrie</div>
+  <div class="sheet-body" style="padding:0 12px 16px">
+    <div class="history-toolbar" style="padding:8px 0">
+      <button class="history-filter-btn active" data-period="1h" onclick="setHistoryFilter(this)">1h</button>
+      <button class="history-filter-btn" data-period="6h" onclick="setHistoryFilter(this)">6h</button>
+      <button class="history-filter-btn" data-period="24h" onclick="setHistoryFilter(this)">24h</button>
+      <button class="history-filter-btn" data-period="7d" onclick="setHistoryFilter(this)">7j</button>
+      <label class="history-trail-toggle">
+        <input type="checkbox" checked onchange="toggleHistoryTrail(this.checked)"> Tracé
+      </label>
+      <button class="history-refresh-btn" onclick="loadTelemetryHistory()">Actualiser</button>
+    </div>
+    <div class="history-table-wrap" id="history-table-wrap-m" style="max-height:40vh;overflow-y:auto">
+      <div class="history-status" id="history-status-m">Cliquer sur Actualiser pour charger</div>
+    </div>
   </div>
 </div>
 
@@ -1612,21 +1739,6 @@ let rideTimerInterval = null;
 
 function updateLockUI(locked) {
   scooterLocked = locked;
-  const lockBtn = document.getElementById('lock-btn');
-  const rideBtn = document.getElementById('ride-btn');
-
-  // Lock button style
-  if (lockBtn) {
-    lockBtn.style.borderColor = locked ? 'var(--red)' : 'var(--green)';
-    lockBtn.style.color = locked ? 'var(--red)' : 'var(--green)';
-    lockBtn.title = locked ? 'Deverrouiller la trottinette' : 'Verrouiller la trottinette';
-    // Change SVG to show locked/unlocked
-    if (locked) {
-      lockBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
-    } else {
-      lockBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 8-3"/></svg>';
-    }
-  }
 
   // Lock overlay on speedometer
   document.getElementById('lock-overlay-desktop').classList.toggle('visible', locked);
@@ -1637,18 +1749,7 @@ function updateLockUI(locked) {
   document.getElementById('speedo-wrap-desktop').classList.toggle('riding', isRiding);
   document.getElementById('speedo-wrap-mobile').classList.toggle('riding', isRiding);
 
-  if (rideBtn) {
-    rideBtn.style.display = '';
-    if (activeRideId) {
-      rideBtn.textContent = 'FIN COURSE';
-      rideBtn.style.borderColor = 'var(--red)';
-      rideBtn.style.color = 'var(--red)';
-    } else {
-      rideBtn.textContent = 'COURSE';
-      rideBtn.style.borderColor = locked ? 'var(--muted)' : 'var(--green)';
-      rideBtn.style.color = locked ? 'var(--muted)' : 'var(--green)';
-    }
-  }
+  updatePlayBtn();
 }
 
 function hideRideTimerSpeedo() {
@@ -1680,24 +1781,11 @@ function updateRideTimer() {
   });
 }
 
-async function toggleLock() {
-  try {
-    const r = await authFetch('/api/scooters/lock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ locked: !scooterLocked })
-    });
-    if (r.ok) {
-      const data = await r.json();
-      updateLockUI(data.locked);
-      addLog('sys', `Trottinette ${data.locked ? 'verrouillee' : 'deverrouillee'}`);
-    }
-  } catch (err) { console.error('[lock]', err); }
-}
-
-async function toggleRide() {
+// Bouton play unifie : play = demarrer course (deverrouille auto), stop = terminer course (reverrouille auto)
+async function togglePlay() {
   try {
     if (activeRideId) {
+      // Arreter la course (reverrouille automatiquement)
       const r = await authFetch('/api/rides/end', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1712,9 +1800,11 @@ async function toggleRide() {
         if (timerEl) timerEl.style.display = 'none';
         hideRideTimerSpeedo();
         updateLockUI(true);
-        addLog('sys', `Course terminee (${data.ride.durationSec}s)`);
+        updatePlayBtn();
+        addLog('sys', `Course terminee`);
       }
     } else {
+      // Demarrer une course (deverrouille automatiquement)
       const r = await authFetch('/api/rides/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1725,12 +1815,51 @@ async function toggleRide() {
         activeRideId = data.rideId;
         rideStartTime = new Date().toISOString();
         updateLockUI(false);
-        rideTimerInterval = setInterval(updateRideTimer, 1000);
-        addLog('sys', `Course ${data.rideId} demarree`);
+        if (!rideTimerInterval) rideTimerInterval = setInterval(updateRideTimer, 1000);
+        updatePlayBtn();
+        addLog('sys', `Course demarree`);
       }
     }
-  } catch (err) { console.error('[ride]', err); }
+  } catch (err) { console.error('[play]', err); }
 }
+
+function updatePlayBtn() {
+  const btn = document.getElementById('play-btn');
+  const icon = document.getElementById('play-icon');
+  if (!btn || !icon) return;
+  if (activeRideId) {
+    // Stop icon (carre)
+    icon.innerHTML = '<rect x="4" y="4" width="16" height="16" rx="2"/>';
+    btn.style.borderColor = 'var(--red)';
+    btn.style.color = 'var(--red)';
+    btn.title = 'Arreter la course';
+  } else {
+    // Play icon (triangle)
+    icon.innerHTML = '<polygon points="5,3 19,12 5,21"/>';
+    btn.style.borderColor = 'var(--green)';
+    btn.style.color = 'var(--green)';
+    btn.title = 'Demarrer une course';
+  }
+}
+
+async function toggleLock() {
+  // Garde pour compatibilite (appels internes)
+  try {
+    const r = await authFetch('/api/scooters/lock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ locked: !scooterLocked })
+    });
+    if (r.ok) {
+      const data = await r.json();
+      updateLockUI(data.locked);
+      addLog('sys', `Trottinette ${data.locked ? 'verrouillee' : 'deverrouillee'}`);
+    }
+  } catch (err) { console.error('[lock]', err); }
+}
+
+// toggleRide remplace par togglePlay — garde pour compatibilite SSE
+async function toggleRide() { return togglePlay(); }
 
 // ── Bouton PTT ───────────────────────────────────────────────────────────────
 const PTT_IDS = ['ptt-btn', 'ptt-btn-desktop'];
@@ -1895,8 +2024,23 @@ function toggleDebugPause() {
   }
 }
 
+function toggleDebugMode(enabled) {
+  authFetch('/debug', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled })
+  }).catch(console.error);
+}
+
+function clearDebugLog() {
+  ['debug-log', 'debug-log-mobile', 'debug-log-panel'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '';
+  });
+}
+
 function appendDebugLog(msg) {
-  ['debug-log', 'debug-log-mobile'].forEach(id => {
+  ['debug-log', 'debug-log-mobile', 'debug-log-panel'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     const line = document.createElement('div');
@@ -2142,11 +2286,25 @@ async function flashFromGitHub() {
   }
 }
 
-// Attach PTT events
+// Attach PTT events (touch + souris)
 PTT_IDS.forEach(id => {
   const btn = document.getElementById(id); if (!btn) return;
-  btn.addEventListener('click',    (e) => { e.preventDefault(); toggleRecording(); });
-  btn.addEventListener('touchend', (e) => { e.preventDefault(); toggleRecording(); }, { passive: false });
+  let touchHandled = false;
+  // touchstart : empecher le scroll/zoom et le menu contextuel sur mobile
+  btn.addEventListener('touchstart', (e) => { e.preventDefault(); }, { passive: false });
+  btn.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    touchHandled = true;
+    toggleRecording();
+    // Reset apres un court delai pour ne pas bloquer les clics desktop
+    setTimeout(() => { touchHandled = false; }, 400);
+  }, { passive: false });
+  // click : uniquement si pas deja traite par touch (evite double-toggle sur mobile)
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (touchHandled) return;
+    toggleRecording();
+  });
 });
 
 // ── Mode simulation ──────────────────────────────────────────────────────────
@@ -2285,6 +2443,138 @@ async function toggleDisableUser(userId, disable) {
     if (!r.ok) { const d = await r.json(); alert(d.error || 'Erreur'); }
     loadUsers();
   } catch (e) { alert('Erreur: ' + e.message); }
+}
+
+// ── Onglets panneau droit (desktop) ───────────────────────────────────────────
+function switchRightTab(btn) {
+  const panelId = btn.dataset.panel;
+  document.querySelectorAll('.right-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.right-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  const panel = document.getElementById(panelId);
+  if (panel) panel.classList.add('active');
+  // Charger l'historique automatiquement a la premiere ouverture
+  if (panelId === 'panel-history' && !historyLoaded) loadTelemetryHistory();
+}
+
+// ── Historique telemetrie ────────────────────────────────────────────────────
+let historyPeriod = '1h';
+let historyLoaded = false;
+let historyTrailVisible = true;
+let historyTrailMobile = null;
+let historyTrailDesktop = null;
+
+function setHistoryFilter(btn) {
+  document.querySelectorAll('.history-filter-btn').forEach(b => b.classList.remove('active'));
+  // Activer tous les boutons avec la meme periode (desktop + mobile)
+  document.querySelectorAll(`.history-filter-btn[data-period="${btn.dataset.period}"]`).forEach(b => b.classList.add('active'));
+  historyPeriod = btn.dataset.period;
+  loadTelemetryHistory();
+}
+
+function getHistorySince() {
+  const now = new Date();
+  switch (historyPeriod) {
+    case '1h':  return new Date(now - 3600000).toISOString();
+    case '6h':  return new Date(now - 6 * 3600000).toISOString();
+    case '24h': return new Date(now - 24 * 3600000).toISOString();
+    case '7d':  return new Date(now - 7 * 24 * 3600000).toISOString();
+    default:    return new Date(now - 3600000).toISOString();
+  }
+}
+
+async function loadTelemetryHistory() {
+  if (!selectedScooterIdLocal) {
+    setHistoryStatus('Aucune trottinette selectionnee');
+    return;
+  }
+  const refreshBtn = document.getElementById('history-refresh-btn');
+  if (refreshBtn) refreshBtn.disabled = true;
+  setHistoryStatus('Chargement...');
+
+  try {
+    const since = getHistorySince();
+    const limit = historyPeriod === '7d' ? 500 : 200;
+    const url = `/api/telemetry/${encodeURIComponent(selectedScooterIdLocal)}?limit=${limit}&since=${encodeURIComponent(since)}`;
+    const r = await authFetch(url);
+    if (!r.ok) throw new Error('Erreur ' + r.status);
+    const data = await r.json();
+    historyLoaded = true;
+    renderHistoryTable(data);
+    renderHistoryTrail(data);
+  } catch (err) {
+    setHistoryStatus('Erreur: ' + err.message);
+  }
+  if (refreshBtn) refreshBtn.disabled = false;
+}
+
+function setHistoryStatus(msg) {
+  ['history-status', 'history-status-m'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = msg;
+  });
+}
+
+function renderHistoryTable(entries) {
+  const html = buildHistoryTableHtml(entries);
+  // Desktop
+  const wrap = document.getElementById('history-table-wrap');
+  if (wrap) wrap.innerHTML = entries.length ? html : '<div class="history-status">Aucune donnee pour cette periode</div>';
+  // Mobile
+  const wrapM = document.getElementById('history-table-wrap-m');
+  if (wrapM) wrapM.innerHTML = entries.length ? html : '<div class="history-status">Aucune donnee pour cette periode</div>';
+}
+
+function buildHistoryTableHtml(entries) {
+  if (!entries.length) return '';
+  let html = `<table class="history-table"><thead><tr>
+    <th>Heure</th><th>Vitesse</th><th>Tension</th><th>Temp</th><th>Position</th><th>GPS</th>
+  </tr></thead><tbody>`;
+  for (const e of entries) {
+    const t = new Date(e.created_at);
+    const time = `${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
+    const date = `${pad(t.getDate())}/${pad(t.getMonth()+1)}`;
+    const timestamp = historyPeriod === '7d' ? `${date} ${time}` : time;
+    const speed = e.speed != null ? e.speed.toFixed(1) + ' km/h' : '--';
+    const voltage = e.voltage != null ? e.voltage.toFixed(1) + ' V' : '--';
+    const temp = e.temp != null ? Math.round(e.temp) + ' °C' : '--';
+    const pos = (e.lat && e.lon) ? `${e.lat.toFixed(4)}, ${e.lon.toFixed(4)}` : '--';
+    const gpsCls = e.gps_fix === 'ok' ? 'gps-ok' : 'gps-no';
+    const gpsText = e.gps_fix === 'ok' ? 'GPS' : (e.gps_fix || 'Cell');
+    html += `<tr>
+      <td>${timestamp}</td><td>${speed}</td><td>${voltage}</td>
+      <td>${temp}</td><td>${pos}</td><td class="${gpsCls}">${gpsText}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
+function renderHistoryTrail(entries) {
+  // Supprimer les anciens traces
+  clearHistoryTrail();
+  // Filtrer les entrees avec coordonnees GPS valides
+  const points = entries
+    .filter(e => e.lat && e.lon && e.lat !== 0 && e.lon !== 0)
+    .map(e => [e.lat, e.lon]);
+  if (points.length < 2 || !historyTrailVisible) return;
+
+  const trailOpts = { color: '#42f7fb', weight: 3, opacity: 0.7, dashArray: '6, 8' };
+  if (map) historyTrailMobile = L.polyline(points, trailOpts).addTo(map);
+  if (mapDesktop) historyTrailDesktop = L.polyline(points, trailOpts).addTo(mapDesktop);
+}
+
+function clearHistoryTrail() {
+  if (historyTrailMobile && map) { map.removeLayer(historyTrailMobile); historyTrailMobile = null; }
+  if (historyTrailDesktop && mapDesktop) { mapDesktop.removeLayer(historyTrailDesktop); historyTrailDesktop = null; }
+}
+
+function toggleHistoryTrail(visible) {
+  historyTrailVisible = visible;
+  // Synchroniser les checkboxes desktop et mobile
+  document.querySelectorAll('#trail-toggle, .sheet-body input[type="checkbox"]').forEach(cb => cb.checked = visible);
+  if (!visible) clearHistoryTrail();
+  else if (historyLoaded) loadTelemetryHistory();
 }
 
 function initApp() {
