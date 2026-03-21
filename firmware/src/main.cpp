@@ -534,29 +534,70 @@ static void taskCapture(void *) {
         if (otaMode) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
 
         // ── I2S toujours actif, envoi audio seulement quand PTT enfoncé ──
-        // Audio envoyé en binaire PCM16 brut (le proxy le forward à OpenAI)
         if (!sleepIsI2SDisabled()) {
             size_t len = audioCaptureChunk(pcmBuf);  // toujours drainer le DMA
-            if (voiceActive && wsProxyConnected && len > 0) {
-                // Accumuler 4 chunks (128 ms) avant d'envoyer une frame WS binaire
-                if (pcmAccumLen + len <= sizeof(pcmAccum)) {
-                    memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
-                    pcmAccumLen += len;
-                }
-                if (pcmAccumLen >= sizeof(pcmAccum)) {
-                    wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
-                    static uint32_t lastAudioLog = 0;
-                    if (millis() - lastAudioLog > 2000) {
-                        Serial.printf("[audio] envoi bin %u bytes ws=%d\n",
-                            (unsigned)pcmAccumLen, wsProxyConnected);
-                        lastAudioLog = millis();
+
+            if (_wsUseLte) {
+                // ── Mode LTE chained : accumuler tout le PTT, envoyer en un bloc ──
+                // Buffer alloué dynamiquement au premier usage
+                static uint8_t *lteAudioBuf = nullptr;
+                static size_t   lteAudioLen = 0;
+                static size_t   lteAudioCap = 0;
+                static bool     lteWasActive = false;
+
+                if (!lteAudioBuf) {
+                    // ~8s de PCM16 16kHz = 256KB
+                    lteAudioCap = 16000 * 2 * 8;
+                    lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
+                    if (!lteAudioBuf) {
+                        // Fallback 4s
+                        lteAudioCap = 16000 * 2 * 4;
+                        lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
                     }
+                    if (lteAudioBuf) Serial.printf("[lte] buffer audio %u KB alloué\n",
+                        (unsigned)(lteAudioCap / 1024));
+                }
+
+                if (voiceActive && wsProxyConnected && len > 0 && lteAudioBuf) {
+                    if (lteAudioLen + len <= lteAudioCap) {
+                        memcpy(lteAudioBuf + lteAudioLen, pcmBuf, len);
+                        lteAudioLen += len;
+                    }
+                    // else: buffer plein, ignorer silencieusement
+                } else if (lteWasActive && !voiceActive && lteAudioLen > 0 && wsProxyConnected) {
+                    // PTT relâché : envoyer signal + blob complet
+                    char sig[64];
+                    snprintf(sig, sizeof(sig), "{\"type\":\"voice_blob\",\"size\":%u}",
+                        (unsigned)lteAudioLen);
+                    wsProxy.sendTXT(sig);
+                    wsProxy.sendBIN(lteAudioBuf, lteAudioLen);
+                    Serial.printf("[lte-audio] envoi blob %u bytes (%u ms)\n",
+                        (unsigned)lteAudioLen, (unsigned)(lteAudioLen / 32));
+                    lteAudioLen = 0;
+                    audioBeep(600.0f, 30);  // bip : en cours de traitement
+                }
+                lteWasActive = voiceActive;
+            } else {
+                // ── Mode WiFi : streaming temps réel via Realtime API ──
+                if (voiceActive && wsProxyConnected && len > 0) {
+                    if (pcmAccumLen + len <= sizeof(pcmAccum)) {
+                        memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
+                        pcmAccumLen += len;
+                    }
+                    if (pcmAccumLen >= sizeof(pcmAccum)) {
+                        wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
+                        static uint32_t lastAudioLog = 0;
+                        if (millis() - lastAudioLog > 2000) {
+                            Serial.printf("[audio] envoi bin %u bytes ws=%d\n",
+                                (unsigned)pcmAccumLen, wsProxyConnected);
+                            lastAudioLog = millis();
+                        }
+                        pcmAccumLen = 0;
+                    }
+                } else if (!voiceActive && pcmAccumLen > 0) {
+                    wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
                     pcmAccumLen = 0;
                 }
-            } else if (!voiceActive && pcmAccumLen > 0) {
-                // Flush le reste
-                wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
-                pcmAccumLen = 0;
             }
         } else {
             vTaskDelay(pdMS_TO_TICKS(50));  // Économiser le CPU en mode veille

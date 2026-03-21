@@ -267,6 +267,156 @@ function sendScooterCmd(action, intensity) {
 
 }
 
+// ─── Mode chained : gpt-audio-1.5 pour LTE (audio in → audio out) ────────────
+const CHAINED_SYSTEM_PROMPT =
+  'Tu es l\'assistante vocale d\'une trottinette électrique. ' +
+  'Réponds TOUJOURS en français, en 1-2 phrases courtes maximum.\n' +
+  'Pour toute question sur la batterie, vitesse, tension, température → appelle lire_telemetrie\n' +
+  'Pour tout mouvement (avance, freine, stop, vitesse) → appelle commande_trottinette\n' +
+  'Appelle l\'outil PUIS confirme brièvement le résultat.';
+
+// Resampler PCM16 24kHz → PCM8 unsigned 8kHz (partagé entre Realtime et Chained)
+function resample24to8(pcm16_24k) {
+  const nSamples = Math.floor(pcm16_24k.length / 2);
+  const nOut = Math.floor(nSamples / 3);
+  const pcm8 = Buffer.alloc(nOut);
+  for (let i = 0; i < nOut; i++) {
+    const s0 = pcm16_24k.readInt16LE(i * 6);
+    const s1 = pcm16_24k.readInt16LE(i * 6 + 2);
+    const s2 = pcm16_24k.readInt16LE(i * 6 + 4);
+    const avg = Math.round((s0 + s1 + s2) / 3);
+    pcm8[i] = Math.max(0, Math.min(255, (avg >> 8) + 128));
+  }
+  return pcm8;
+}
+
+async function processChainedAudio(scooterId, pcm16Buffer) {
+  const entry = scooters.get(scooterId);
+  if (!entry) return;
+
+  const durationMs = Math.round(pcm16Buffer.length / 32);
+  console.log(`[chained] traitement audio ${pcm16Buffer.length} bytes (${durationMs}ms)`);
+
+  // Construire les messages avec historique
+  const messages = [
+    { role: 'system', content: CHAINED_SYSTEM_PROMPT },
+    ...entry.chainedHistory,
+    {
+      role: 'user',
+      content: [{
+        type: 'input_audio',
+        input_audio: { data: pcm16Buffer.toString('base64'), format: 'pcm16' }
+      }]
+    }
+  ];
+
+  // Chat Completions tools (format Chat API, pas Realtime)
+  const tools = [
+    { type: 'function', function: { name: TOOL_SCHEMA.name, description: TOOL_SCHEMA.description, parameters: TOOL_SCHEMA.parameters } },
+    { type: 'function', function: { name: TELEMETRY_TOOL_SCHEMA.name, description: TELEMETRY_TOOL_SCHEMA.description, parameters: TELEMETRY_TOOL_SCHEMA.parameters } }
+  ];
+
+  try {
+    let response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-audio-1.5',
+        modalities: ['text', 'audio'],
+        audio: { voice: 'alloy', format: 'pcm16' },
+        messages,
+        tools,
+        tool_choice: 'auto'
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      console.error(`[chained] API erreur ${response.status}: ${err.substring(0, 200)}`);
+      return;
+    }
+
+    let result = await response.json();
+    let choice = result.choices?.[0];
+    if (!choice) return;
+
+    // Gérer les tool calls (peut nécessiter un 2e appel)
+    if (choice.message?.tool_calls?.length) {
+      const assistantMsg = choice.message;
+      messages.push(assistantMsg);
+
+      for (const tc of assistantMsg.tool_calls) {
+        let toolResult = {};
+        if (tc.function.name === 'commande_trottinette') {
+          const args = JSON.parse(tc.function.arguments);
+          sendScooterCmd(args.action, args.intensity);
+          toolResult = { success: true, action: args.action, intensity: args.intensity ?? null };
+          console.log(`[chained] commande: ${args.action} intensity=${args.intensity ?? 'n/a'}`);
+        } else if (tc.function.name === 'lire_telemetrie') {
+          toolResult = getSelectedTelemetry();
+          console.log('[chained] lire_telemetrie:', JSON.stringify(toolResult));
+        }
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(toolResult) });
+      }
+
+      // 2e appel pour obtenir la réponse audio finale
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'gpt-audio-1.5',
+          modalities: ['text', 'audio'],
+          audio: { voice: 'alloy', format: 'pcm16' },
+          messages, tools, tool_choice: 'auto'
+        })
+      });
+      if (!response.ok) { console.error(`[chained] 2e appel erreur ${response.status}`); return; }
+      result = await response.json();
+      choice = result.choices?.[0];
+      if (!choice) return;
+    }
+
+    // Traiter la réponse audio
+    const msg = choice.message;
+    const transcript = msg.audio?.transcript || msg.content || '';
+    console.log(`[chained] réponse: "${transcript}"`);
+
+    // Broadcast au dashboard
+    if (transcript) broadcastSSE({ type: 'ai_response', text: transcript });
+
+    // Historique conversation (garder les 10 derniers tours)
+    if (msg.audio?.id) {
+      entry.chainedHistory.push({ role: 'assistant', audio: { id: msg.audio.id } });
+    } else if (msg.content) {
+      entry.chainedHistory.push({ role: 'assistant', content: msg.content });
+    }
+    if (entry.chainedHistory.length > 20) {
+      entry.chainedHistory = entry.chainedHistory.slice(-10);
+    }
+
+    // Envoyer l'audio à l'ESP32
+    if (msg.audio?.data && entry.ws.readyState === WebSocket.OPEN) {
+      const pcm16_24k = Buffer.from(msg.audio.data, 'base64');
+      const pcm8 = resample24to8(pcm16_24k);
+      console.log(`[chained] audio: ${pcm16_24k.length} → ${pcm8.length} bytes PCM8 8kHz`);
+
+      // Dashboard : audio 24kHz original
+      const b64 = msg.audio.data;
+      const CHUNK = 4096;
+      for (let i = 0; i < b64.length; i += CHUNK) {
+        const p = `data: ${JSON.stringify({ type: 'audio', data: b64.slice(i, i + CHUNK) })}\n\n`;
+        for (const c of sseClients) { try { c.write(p); } catch (_) {} }
+      }
+
+      // ESP32 : audio PCM8 8kHz binaire (tout d'un coup, pas de streaming)
+      try { entry.ws.send(pcm8); } catch (_) {}
+    }
+
+  } catch (err) {
+    console.error('[chained] erreur:', err.message);
+  }
+}
+
 // ─── Mode cloud : OpenAI Realtime ─────────────────────────────────────────────
 function connectOpenAI() {
   if (!OPENAI_API_KEY) {
@@ -351,22 +501,9 @@ function connectOpenAI() {
       case 'response.output_audio.delta':
       case 'response.audio.delta': {
         const b64 = event.delta ?? '';
-        // Décoder base64 → PCM16 24kHz
+        // Décoder base64 → PCM16 24kHz → PCM8 8kHz
         const pcm24 = Buffer.from(b64, 'base64');
-        const nSamples = Math.floor(pcm24.length / 2);
-        // Downsampler 3:1 (24kHz → 8kHz) + convertir 16→8 bits unsigned
-        // Le DAC ESP32 est 8 bits — inutile d'envoyer 16 bits sur LTE
-        // Débit : 48 KB/s → 8 KB/s (÷6)
-        const nOut = Math.floor(nSamples / 3);
-        const pcm8 = Buffer.alloc(nOut);
-        for (let i = 0; i < nOut; i++) {
-          const s0 = pcm24.readInt16LE(i * 6);
-          const s1 = pcm24.readInt16LE(i * 6 + 2);
-          const s2 = pcm24.readInt16LE(i * 6 + 4);
-          // Moyenne + conversion signed 16→unsigned 8 (>> 8 puis +128)
-          const avg = Math.round((s0 + s1 + s2) / 3);
-          pcm8[i] = Math.max(0, Math.min(255, (avg >> 8) + 128));
-        }
+        const pcm8 = resample24to8(pcm24);
         // Envoyer en base64 au dashboard (24kHz original)
         const CHUNK = 4096;
         for (let i = 0; i < b64.length; i += CHUNK) {
@@ -1386,7 +1523,19 @@ esp32Wss.on('connection', (ws) => {
 
   ws.on('message', (data, isBinary) => {
     if (isBinary) {
-      // Audio PCM — uniquement de la trottinette sélectionnée vers OpenAI
+      const entry = scooters.get(scooterId);
+
+      // Mode chained (LTE) : blob audio complet → gpt-audio-1.5
+      if (entry && entry.chainedPending) {
+        entry.chainedPending = false;
+        console.log(`[chained] blob reçu: ${data.length} bytes de ${scooterId}`);
+        if (scooterId === selectedScooterId) {
+          processChainedAudio(scooterId, Buffer.from(data));
+        }
+        return;
+      }
+
+      // Mode streaming (WiFi) : audio PCM vers OpenAI Realtime
       if (scooterId === selectedScooterId) {
         if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
           openaiWs.send(JSON.stringify({
@@ -1396,7 +1545,6 @@ esp32Wss.on('connection', (ws) => {
         } else {
           console.warn(`[audio] openaiWs pas prêt (state=${openaiWs?.readyState}, connected=${openaiConnected})`);
         }
-        // Relayer le PCM brut aux clients debug-audio (trottinette sélectionnée seulement)
         for (const c of debugAudioClients) {
           if (c.readyState === WebSocket.OPEN) {
             try { c.send(data, { binary: true }); } catch (_) {}
@@ -1414,6 +1562,8 @@ esp32Wss.on('connection', (ws) => {
             telemetry: { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0, rssi: -999, conn: 'Aucun' },
             fwVersion: msg.version || null,
             debugMode: false,
+            chainedHistory: [],     // historique conversation pour gpt-audio-1.5
+            chainedPending: false,  // true quand on attend le blob binaire
             connectedAt: Date.now(),
             name: null,
             locked: true  // verrouillée par défaut au démarrage
@@ -1534,6 +1684,14 @@ esp32Wss.on('connection', (ws) => {
                 }
               }
             }).catch(err => console.error(`[wifi-geo] erreur: ${err.message}`));
+          }
+
+        } else if (msg.type === 'voice_blob') {
+          // Signal du mode chained LTE : le prochain message binaire est un blob audio complet
+          const entry = scooters.get(scooterId);
+          if (entry) {
+            entry.chainedPending = true;
+            console.log(`[chained] attente blob audio ${msg.size} bytes de ${scooterId}`);
           }
 
         } else if (msg.type === 'lock_ack') {
