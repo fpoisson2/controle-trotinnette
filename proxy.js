@@ -1624,6 +1624,14 @@ esp32Wss.on('connection', (ws) => {
           const entry = scooters.get(scooterId);
           if (entry) {
             const { type, ...fields } = msg;
+            // Ne pas écraser la position wifi-geo avec lat=0/lon=0 de l'ESP
+            const hasWifiPos = entry.telemetry.lat && entry.telemetry.lon &&
+              typeof entry.telemetry.gps_fix === 'string' && entry.telemetry.gps_fix.startsWith('wifi');
+            if (hasWifiPos && (!fields.lat || !fields.lon || fields.gps_fix === 'none')) {
+              delete fields.lat;
+              delete fields.lon;
+              delete fields.gps_fix;
+            }
             entry.telemetry = { ...entry.telemetry, ...fields };
             // Persister en BD (throttle : 1 écriture par 30s par trottinette)
             const now = Date.now();

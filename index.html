@@ -1407,10 +1407,15 @@ function applyTelemetry(data) {
     const elM = document.getElementById('val-conn-m'); if (elM) elM.textContent = data.conn;
   }
   if (data.gps_fix !== undefined) {
-    const ok = data.gps_fix === 'ok';
+    const fix = data.gps_fix;
+    let label = 'Aucun', color = 'var(--muted)';
+    if (fix === 'ok') { label = 'GPS'; color = '#4f4'; }
+    else if (fix && fix.startsWith('wifi')) { label = 'WiFi'; color = '#4cf'; }
+    else if (fix === 'db') { label = 'BD'; color = '#fa0'; }
+    else if (fix && fix !== 'none') { label = 'Cell'; color = '#fa0'; }
     ['gps-status', 'gps-status-m'].forEach(id => {
       const el = document.getElementById(id);
-      if (el) { el.textContent = ok ? 'GPS' : 'Cell'; el.style.color = ok ? '#4f4' : '#fa0'; }
+      if (el) { el.textContent = label; el.style.color = color; }
     });
   }
   if (data.lat !== undefined && data.lon !== undefined) updateMapPos(data.lat, data.lon);
