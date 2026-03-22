@@ -142,6 +142,8 @@
     border-bottom: 1px solid var(--border); flex-shrink: 0;
   }
 
+  .mobile-go-overlay { display: none; }
+
   /* ── Speedometer ── */
   .speedometer-wrap {
     position: relative;
@@ -464,23 +466,40 @@
     background: var(--surface);
     border-top-left-radius: 20px;
     border-top-right-radius: 20px;
-    max-height: 70vh;
-    transform: translateY(100%);
+    height: 90vh;
+    transform: translate3d(0, 100%, 0);
+    -webkit-transform: translate3d(0, 100%, 0);
     transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
     display: flex; flex-direction: column;
+    will-change: transform;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
   }
-  .bottom-sheet.open { transform: translateY(0); }
+  .bottom-sheet.open {
+    transform: translate3d(0, 0, 0);
+  }
+  .sheet-drag-zone {
+    width: 100%;
+    padding: 12px 0 8px;
+    flex-shrink: 0;
+    cursor: grab;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
   .sheet-handle {
     width: 36px; height: 4px;
     background: var(--border); border-radius: 2px;
-    margin: 10px auto 6px;
-    flex-shrink: 0;
+    pointer-events: none;
   }
   .sheet-title {
     font-size: 14px; font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.08em;
-    color: var(--muted); padding: 6px 20px 12px;
-    flex-shrink: 0;
+    color: var(--muted); padding: 0 20px 4px;
+    pointer-events: none;
   }
   .sheet-body {
     flex: 1; overflow-y: auto; padding: 0 20px 24px;
@@ -667,12 +686,13 @@
       font-size: 15px;
       display: flex;
       flex-direction: column;
-      height: auto;
-      min-height: 100dvh;
-      min-height: 100vh; /* fallback */
-      overflow-y: auto;
-      overflow-x: hidden;
-      -webkit-overflow-scrolling: touch;
+      height: 100dvh;
+      height: 100vh;
+      overflow: hidden;
+    }
+    /* Bloquer le scroll quand un bottom sheet est ouvert */
+    body.sheet-active .mobile-layout {
+      overflow: hidden !important;
     }
     header {
       padding: 0 10px; gap: 6px;
@@ -689,14 +709,15 @@
     .mobile-layout {
       flex-direction: column;
       flex: 1;
-      overflow: visible;
-      padding-bottom: 70px;
+      min-height: 0;
+      overflow: hidden;
     }
 
     .mobile-speed-section {
       display: flex; flex-direction: column;
-      align-items: center; padding: 24px 16px 16px;
-      gap: 16px;
+      align-items: center; padding: 12px 16px 8px;
+      gap: 10px;
+      flex-shrink: 0;
     }
     .speedometer-wrap { width: 220px; height: 220px; }
     .speedometer { width: 220px; height: 220px; }
@@ -705,10 +726,47 @@
     .speed-unit { font-size: 18px; }
     .pill-value { font-size: 28px; }
 
+    .mobile-go-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      border-radius: 50%;
+      background: rgba(186,229,98,0.15);
+      border: 3px solid var(--green);
+      color: var(--green);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      font-family: 'Inter', system-ui, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      transition: all 0.3s;
+    }
+    .mobile-go-overlay svg {
+      width: 48px; height: 48px;
+    }
+    .mobile-go-overlay span {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+    }
+    .mobile-go-overlay.riding {
+      background: rgba(237,30,32,0.12);
+      border-color: var(--red);
+      color: var(--red);
+    }
+    .mobile-go-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
     .mobile-map {
-      width: 100%; height: 30vh; min-height: 180px;
+      flex: 1;
+      min-height: 0;
       position: relative;
-      /* Contenir les z-index internes de Leaflet pour eviter que la carte passe au-dessus des bottom sheets */
       isolation: isolate;
       z-index: 0;
       contain: layout;
@@ -721,24 +779,55 @@
     }
 
     .mobile-ptt-section {
-      display: flex; flex-direction: column;
-      align-items: center; padding: 20px 16px;
-      gap: 12px;
+      position: fixed;
+      bottom: calc(52px + env(safe-area-inset-bottom, 0px));
+      right: 14px;
+      z-index: 1099;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0;
     }
     .mobile-ptt-section .ptt-container {
-      width: 100px; height: 100px;
+      width: 42px; height: 42px;
     }
     .mobile-ptt-section .ptt-btn-new {
-      width: 100px; height: 100px;
+      width: 42px; height: 42px;
+      background: var(--surface);
+      border: 2px solid var(--ptt-idle);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.4);
     }
     .mobile-ptt-section .ptt-btn-new svg {
-      width: 40px; height: 40px;
+      width: 18px; height: 18px;
+    }
+    .mobile-ptt-section .ptt-status {
+      display: none;
+    }
+    .mobile-ptt-section .ptt-ripple {
+      display: none;
+    }
+    .mobile-ptt-section .ptt-btn-new.active {
+      border-color: var(--ptt-active);
+      background: rgba(237,30,32,0.15);
+      box-shadow: 0 0 20px rgba(237,30,32,0.4);
     }
   }
 
   @media (min-width: 768px) {
     .mobile-layout { display: none !important; }
     .sheet-pills { display: none !important; }
-    .bottom-sheet-overlay { display: none !important; }
-    .bottom-sheet { display: none !important; }
+    .bottom-sheet-overlay:not(.visible) { display: none !important; }
+    .bottom-sheet:not(.open) { display: none !important; }
+  }
+
+  /* Forcer l'affichage du sheet ouvert quel que soit le viewport */
+  .bottom-sheet.open {
+    display: flex !important;
+    transform: translate3d(0, 0, 0);
+    -webkit-transform: translate3d(0, 0, 0);
+  }
+  .bottom-sheet-overlay.visible {
+    display: block !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
   }

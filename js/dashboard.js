@@ -76,6 +76,8 @@ window.addEventListener('resize', applyLayout);
 // ── Bottom sheets (mobile) ───────────────────────────────────────────────────
 let activeSheet = null;
 
+let _sheetScrollY = 0;
+
 function toggleSheet(name) {
   if (activeSheet === name) {
     closeSheet();
@@ -88,6 +90,7 @@ function toggleSheet(name) {
   if (sheet) {
     overlay.classList.add('visible');
     sheet.classList.add('open');
+    sheet.style.removeProperty('transform');
     document.body.classList.add('sheet-active');
   }
   document.querySelectorAll('.sheet-pill').forEach(p => {
@@ -96,9 +99,12 @@ function toggleSheet(name) {
 }
 
 function closeSheet() {
+  document.querySelectorAll('.bottom-sheet').forEach(s => {
+    s.classList.remove('open');
+    s.style.removeProperty('transform');
+  });
   activeSheet = null;
   document.getElementById('sheet-overlay').classList.remove('visible');
-  document.querySelectorAll('.bottom-sheet').forEach(s => s.classList.remove('open'));
   document.querySelectorAll('.sheet-pill').forEach(p => p.classList.remove('active'));
   document.body.classList.remove('sheet-active');
 }
@@ -593,7 +599,10 @@ function sendCmd(action) {
 // ── Musique ──────────────────────────────────────────────────────────────────
 function musicCmd(action) {
   const body = { action };
-  if (action === 'play') body.track = parseInt(document.getElementById('music-track').value);
+  if (action === 'play') {
+    const sel = document.getElementById('music-track-m') || document.getElementById('music-track');
+    body.track = parseInt(sel.value);
+  }
   authFetch('/api/music', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -711,6 +720,21 @@ function updatePlayBtn() {
     btn.style.color = '#000';
     btn.title = 'Demarrer une course';
     if (label) label.textContent = 'GO';
+  }
+  // Sync mobile GO overlay
+  const mBtn = document.getElementById('mobile-go-btn');
+  const mIcon = document.getElementById('mobile-go-icon');
+  const mLabel = document.getElementById('mobile-go-label');
+  if (mBtn) {
+    if (activeRideId) {
+      // Course en cours → cacher l'overlay pour voir la vitesse
+      mBtn.classList.add('hidden');
+    } else {
+      mBtn.classList.remove('hidden');
+      mBtn.classList.remove('riding');
+      if (mIcon) mIcon.innerHTML = '<polygon points="8,5 19,12 8,19"/>';
+      if (mLabel) mLabel.textContent = 'GO';
+    }
   }
 }
 
@@ -1207,8 +1231,75 @@ onTap(document.getElementById('sheet-overlay'), closeSheet, 'sheet-overlay');
 
 // Play button
 onTap(document.getElementById('play-btn'), togglePlay, 'play-btn');
+onTap(document.getElementById('mobile-go-btn'), togglePlay, 'mobile-go-btn');
 
-console.log('[init] Touch handlers attaches, version=' + Date.now());
+// ── Bottom sheet drag ────────────────────────────────────────────────────────
+(function() {
+  let dragSheet = null, startY = 0, startPx = 0, sheetH = 0, lastY = 0, lastTime = 0;
+
+  document.querySelectorAll('.bottom-sheet .sheet-drag-zone').forEach(dragZone => {
+    dragZone.addEventListener('touchstart', function(e) {
+      dragSheet = dragZone.closest('.bottom-sheet');
+      if (!dragSheet) return;
+      sheetH = dragSheet.offsetHeight;
+      startY = lastY = e.touches[0].clientY;
+      lastTime = Date.now();
+      const m = new DOMMatrix(getComputedStyle(dragSheet).transform);
+      startPx = m.m42;
+      dragSheet.style.transition = 'none';
+      e.preventDefault();
+    }, { passive: false });
+  });
+
+  document.addEventListener('touchmove', function(e) {
+    if (!dragSheet) return;
+    const y = e.touches[0].clientY;
+    lastY = y;
+    lastTime = Date.now();
+    let newY = Math.max(0, Math.min(sheetH, startPx + (y - startY)));
+    dragSheet.style.transform = 'translate3d(0,' + newY + 'px,0)';
+    e.preventDefault();
+  }, { passive: false });
+
+  document.addEventListener('touchend', function() {
+    if (!dragSheet) return;
+    const sheet = dragSheet;
+    dragSheet = null;
+    const m = new DOMMatrix(getComputedStyle(sheet).transform);
+    const finalY = m.m42;
+    // Velocite : si swipe rapide vers le bas → fermer
+    const velocity = (lastY - startY) / Math.max(1, Date.now() - lastTime + 100);
+    const full = 0, half = sheetH * 0.5, closed = sheetH;
+
+    sheet.style.transition = 'transform 0.3s cubic-bezier(0.32, 0.72, 0, 1)';
+
+    if (velocity > 0.5 || finalY > sheetH * 0.75) {
+      // Swipe rapide vers le bas ou position basse → fermer
+      sheet.style.transform = 'translate3d(0,' + closed + 'px,0)';
+      setTimeout(() => { sheet.style.removeProperty('transform'); sheet.style.removeProperty('transition'); closeSheet(); }, 300);
+    } else if (velocity < -0.5 || finalY < sheetH * 0.2) {
+      // Swipe rapide vers le haut ou position haute → full
+      sheet.style.transform = 'translate3d(0,0,0)';
+      setTimeout(() => sheet.style.transition = '', 300);
+    } else {
+      // Snap à la position la plus proche
+      const dFull = Math.abs(finalY - full);
+      const dHalf = Math.abs(finalY - half);
+      const dClose = Math.abs(finalY - closed);
+      const min = Math.min(dFull, dHalf, dClose);
+      const snapY = (min === dClose) ? closed : (min === dFull) ? full : half;
+      if (snapY === closed) {
+        sheet.style.transform = 'translate3d(0,' + closed + 'px,0)';
+        setTimeout(() => { sheet.style.removeProperty('transform'); sheet.style.removeProperty('transition'); closeSheet(); }, 300);
+      } else {
+        sheet.style.transform = 'translate3d(0,' + snapY + 'px,0)';
+        setTimeout(() => sheet.style.transition = '', 300);
+      }
+    }
+  });
+})();
+
+console.log('[init] Touch handlers + sheet drag, v=' + Date.now());
 
 // ── Mode simulation ──────────────────────────────────────────────────────────
 function toggleSim() {
