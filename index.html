@@ -437,7 +437,7 @@
   /* ── Bottom sheet pills (mobile) ── */
   .sheet-pills {
     display: none;
-    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    position: fixed; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%);
     z-index: 1100;
     background: var(--surface-raised);
     border: 1px solid var(--border);
@@ -1020,7 +1020,7 @@
   <!-- PTT -->
   <div class="mobile-ptt-section">
     <div class="ptt-container">
-      <button class="ptt-btn-new" id="ptt-btn" onclick="toggleRecording()" title="Appuyer pour parler">
+      <button class="ptt-btn-new" id="ptt-btn" onclick="if(!this._touchHandled)toggleRecording();this._touchHandled=false;" title="Appuyer pour parler">
         <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
       <div class="ptt-ripple"></div>
@@ -2316,15 +2316,43 @@ async function flashFromGitHub() {
 // Attach PTT events (touch mobile)
 PTT_IDS.forEach(id => {
   const btn = document.getElementById(id); if (!btn) return;
-  // Empecher scroll/zoom/menu contextuel sur mobile
+  let pttTouched = false;
+  // Sur mobile, touchstart + preventDefault bloque le click synthetique
+  // On declenche toggleRecording directement sur touchend
   btn.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    // Reprendre l'AudioContext suspendu (requis par les navigateurs mobiles)
+    pttTouched = true;
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
   }, { passive: false });
+  btn.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    if (pttTouched) { pttTouched = false; btn._touchHandled = true; toggleRecording(); }
+  }, { passive: false });
   btn.addEventListener('contextmenu', (e) => { e.preventDefault(); });
-  // Le onclick inline sur le bouton gere le toggle
+  // onclick garde le fonctionnement desktop (souris)
 });
+
+// Attach touch events sur les pills bottom sheet (fiabilite mobile)
+document.querySelectorAll('.sheet-pill').forEach(pill => {
+  let pillTouched = false;
+  pill.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    pillTouched = true;
+  }, { passive: false });
+  pill.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    if (pillTouched) { pillTouched = false; toggleSheet(pill.dataset.sheet); }
+  }, { passive: false });
+});
+
+// Fermeture bottom sheet overlay sur touch (mobile)
+const sheetOverlay = document.getElementById('sheet-overlay');
+if (sheetOverlay) {
+  sheetOverlay.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    closeSheet();
+  }, { passive: false });
+}
 
 // ── Mode simulation ──────────────────────────────────────────────────────────
 function toggleSim() {
