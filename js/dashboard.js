@@ -1301,6 +1301,58 @@ onTap(document.getElementById('mobile-go-btn'), togglePlay, 'mobile-go-btn');
 
 console.log('[init] Touch handlers + sheet drag, v=' + Date.now());
 
+// ── Pull-to-refresh (mobile) ────────────────────────────────────────────────
+(function() {
+  var ptr = document.getElementById('ptr-indicator');
+  if (!ptr) return;
+  var THRESHOLD = 80;
+  var startY = 0;
+  var pulling = false;
+
+  document.addEventListener('touchstart', function(e) {
+    if (document.body.classList.contains('sheet-active')) return;
+    var layout = document.getElementById('mobile-layout');
+    if (!layout || layout.style.display === 'none') return;
+    startY = e.targetTouches[0].screenY;
+    pulling = true;
+    console.log('[PTR] touchstart y=' + startY);
+  }, { passive: true });
+
+  document.addEventListener('touchmove', function(e) {
+    if (!pulling) return;
+    var currentY = e.targetTouches[0].screenY;
+    var dist = currentY - startY;
+    console.log('[PTR] touchmove dist=' + dist);
+    if (dist > 10) {
+      e.preventDefault();
+      var progress = Math.min(dist / THRESHOLD, 1);
+      ptr.style.display = 'flex';
+      ptr.style.height = Math.min(48, dist * 0.5) + 'px';
+      var spinner = ptr.querySelector('.ptr-spinner');
+      if (spinner) spinner.style.transform = 'rotate(' + (progress * 360) + 'deg)';
+    } else {
+      ptr.style.display = 'none';
+      ptr.style.height = '0';
+    }
+  }, { passive: false });
+
+  document.addEventListener('touchend', function() {
+    if (!pulling) return;
+    pulling = false;
+    var h = parseInt(ptr.style.height) || 0;
+    console.log('[PTR] touchend h=' + h);
+    if (h >= 24) {
+      ptr.classList.add('refreshing');
+      location.reload();
+    } else {
+      ptr.style.display = 'none';
+      ptr.style.height = '0';
+    }
+  });
+
+  console.log('[PTR] init ok');
+})();
+
 // ── Mode simulation ──────────────────────────────────────────────────────────
 function toggleSim() {
   simMode = !simMode;
