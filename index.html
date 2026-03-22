@@ -876,7 +876,7 @@
     <!-- PTT -->
     <div class="ptt-wrap">
       <div class="ptt-container">
-        <button class="ptt-btn-new" id="ptt-btn-desktop" title="Activer/desactiver le micro">
+        <button class="ptt-btn-new" id="ptt-btn-desktop" onclick="toggleRecording()" title="Activer/desactiver le micro">
           <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
         <div class="ptt-ripple"></div>
@@ -1016,7 +1016,7 @@
   <!-- PTT -->
   <div class="mobile-ptt-section">
     <div class="ptt-container">
-      <button class="ptt-btn-new" id="ptt-btn" title="Appuyer pour parler">
+      <button class="ptt-btn-new" id="ptt-btn" onclick="toggleRecording()" title="Appuyer pour parler">
         <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
       <div class="ptt-ripple"></div>
@@ -2309,33 +2309,17 @@ async function flashFromGitHub() {
   }
 }
 
-// Attach PTT events (touch + souris)
+// Attach PTT events (touch mobile)
 PTT_IDS.forEach(id => {
   const btn = document.getElementById(id); if (!btn) return;
-  let touchHandled = false;
-  // touchstart : empecher le scroll/zoom et le menu contextuel sur mobile
+  // Empecher scroll/zoom/menu contextuel sur mobile
   btn.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    e.stopPropagation();
     // Reprendre l'AudioContext suspendu (requis par les navigateurs mobiles)
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
   }, { passive: false });
-  btn.addEventListener('touchend', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    touchHandled = true;
-    toggleRecording();
-    // Reset apres un court delai pour ne pas bloquer les clics desktop
-    setTimeout(() => { touchHandled = false; }, 400);
-  }, { passive: false });
-  // Empecher le menu contextuel (appui long sur mobile)
   btn.addEventListener('contextmenu', (e) => { e.preventDefault(); });
-  // click : uniquement si pas deja traite par touch (evite double-toggle sur mobile)
-  btn.addEventListener('click', (e) => {
-    e.preventDefault();
-    if (touchHandled) return;
-    toggleRecording();
-  });
+  // Le onclick inline sur le bouton gere le toggle
 });
 
 // ── Mode simulation ──────────────────────────────────────────────────────────
