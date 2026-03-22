@@ -482,8 +482,8 @@
     transform: translateY(100%);
     transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
     display: flex; flex-direction: column;
-    overflow: hidden;
   }
+  .bottom-sheet.open { transform: translateY(0); }
   .bottom-sheet.open { transform: translateY(0); }
   .sheet-handle {
     width: 36px; height: 4px;
@@ -499,6 +499,9 @@
   }
   .sheet-body {
     flex: 1; overflow-y: auto; padding: 0 20px 24px;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    overscroll-behavior: contain;
   }
 
   /* ── Onglets panneau droit ── */
