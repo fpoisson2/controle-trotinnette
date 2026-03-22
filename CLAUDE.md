@@ -17,7 +17,7 @@ ESP32 ← commandes (cmd JSON) ← Proxy ← OpenAI ← reconnaissance vocale
 
 - **ESP32 firmware** (`firmware/`) : capture audio I2S, manette/frein ADC, controle ESC Flipsky UART, WebSocket client vers proxy
 - **Proxy Node.js** (`proxy.js`) : pont WebSocket entre ESP32 et OpenAI Realtime, auth JWT/bcrypt, SSE vers dashboard, OTA distant
-- **Dashboard** (`index.html`) : telemetrie temps reel, controle manuel, carte Leaflet, debug audio
+- **Dashboard** (`index.html`, `css/dashboard.css`, `js/dashboard.js`) : telemetrie temps reel, controle manuel, carte Leaflet, debug audio
 - **Docker** (`docker-compose.yml`, `Dockerfile`) : proxy + tunnel Cloudflare
 
 ## Fichiers cles
@@ -30,7 +30,9 @@ ESP32 ← commandes (cmd JSON) ← Proxy ← OpenAI ← reconnaissance vocale
 | `firmware/include/flipsky.h` | Pilote UART natif pour ESC Flipsky FT85BS (protocole FTESC V1.6) |
 | `firmware/platformio.ini` | Environnements PlatformIO (USB, OTA local, OTA proxy) |
 | `proxy.js` | Serveur Express + WebSocket (ESP32, OpenAI, debug audio) |
-| `index.html` | SPA dashboard (telemetrie, carte, controle vocal/manuel) |
+| `index.html` | Structure HTML du dashboard |
+| `css/dashboard.css` | Styles du dashboard (themes, responsive, composants) |
+| `js/dashboard.js` | Logique client (auth, SSE, telemetrie, carte, controle, touch) |
 | `docker-compose.yml` | Services proxy + cloudflared |
 | `.env` | Secrets (OPENAI_API_KEY, AUTH_PASSWORD, JWT_SECRET, TUNNEL_TOKEN) -- **ne jamais committer** |
 

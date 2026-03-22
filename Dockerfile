@@ -27,6 +27,8 @@ COPY auth-routes.js .
 COPY fleet.js .
 COPY index.html .
 COPY landing.html .
+COPY css/ css/
+COPY js/ js/
 
 # Copier les sources firmware pour les builds OTA
 # config.h est exclu (contient des credentials) — monté en volume au runtime

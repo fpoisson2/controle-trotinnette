@@ -725,11 +725,24 @@ const app = express();
 app.use(express.json());
 app.use(express.raw({ type: 'application/octet-stream', limit: '10mb' }));
 
+// Servir les fichiers statiques CSS et JS (avec cache courte pour dev)
+app.use('/css', express.static(path.join(__dirname, 'css'), {
+  maxAge: '10m',
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache')
+}));
+app.use('/js', express.static(path.join(__dirname, 'js'), {
+  maxAge: '10m',
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache')
+}));
+
 // ── Routes publiques ──
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'landing.html'));
 });
 app.get('/dashboard', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
