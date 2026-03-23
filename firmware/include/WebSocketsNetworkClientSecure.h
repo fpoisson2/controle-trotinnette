@@ -114,7 +114,10 @@ public:
 #if LTE_ENABLED
         if (_isLte) {
             rc = _gsmSSL.connect(host, port, timeout);
-            if (rc) _sslConnected = true;
+            if (rc) {
+                _sslConnected = true;
+                _lastDataReceived = millis();  // Reset silence timeout après reconnexion
+            }
             return rc;
         }
 #endif

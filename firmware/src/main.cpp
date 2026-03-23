@@ -480,27 +480,58 @@ static void taskCapture(void *) {
         // La lib WebSocket reconnecte automatiquement, mais les sessions SSL
         // fantômes du modem empêchent la reconnexion propre.
 #if LTE_ENABLED
-        if (_wsUseLte && !wsProxyConnected) {
+        {
             static uint32_t lastSslReset = 0;
-            if (millis() - lastSslReset > 10000) {
-                lastSslReset = millis();
-                Serial.println("[ws-lte] reset SSL modem (CCHSTOP+CCHSTART)");
-                _modem.sendAT("+CCHSTOP");
-                _modem.waitResponse(3000);
-                delay(500);
-                // Profiter de la pause SSL pour lire signal + position Cell-ID
-                connUpdateLteRSSI();
-                // Cell-ID : position approx sans GPS
-                {
-                    float lat = 0, lon = 0, acc = 0;
-                    if (_modem.getGsmLocation(&lat, &lon, &acc)) {
-                        if (lat != 0 || lon != 0) {
-                            _gpsLat = lat; _gpsLon = lon; _gpsValid = true;
+            static int lteReconnFails = 0;
+
+            if (_wsUseLte && !wsProxyConnected) {
+                if (millis() - lastSslReset > 10000) {
+                    lastSslReset = millis();
+                    lteReconnFails++;
+
+                    // Toutes les 3 tentatives (30s), vérifier que GPRS est toujours actif
+                    if (lteReconnFails % 3 == 0) {
+                        if (!_modem.isGprsConnected()) {
+                            Serial.println("[ws-lte] GPRS perdu — reconnexion modem...");
+                            if (!modemConnect()) {
+                                Serial.printf("[ws-lte] reconnexion GPRS échouée (tentative %d)\n",
+                                              lteReconnFails);
+                            } else {
+                                Serial.println("[ws-lte] GPRS reconnecté");
+                            }
                         }
                     }
+
+                    // Après 10 min de tentatives (60 × 10s), reboot
+                    if (lteReconnFails > 60) {
+                        Serial.println("[ws-lte] reconnexion impossible après 10 min — reboot");
+                        delay(100);
+                        ESP.restart();
+                    }
+
+                    Serial.printf("[ws-lte] reset SSL modem (CCHSTOP+CCHSTART) tentative %d\n",
+                                  lteReconnFails);
+                    _modem.sendAT("+CCHSTOP");
+                    _modem.waitResponse(3000);
+                    delay(500);
+                    // Profiter de la pause SSL pour lire signal + position Cell-ID
+                    connUpdateLteRSSI();
+                    // Cell-ID : position approx sans GPS
+                    {
+                        float lat = 0, lon = 0, acc = 0;
+                        if (_modem.getGsmLocation(&lat, &lon, &acc)) {
+                            if (lat != 0 || lon != 0) {
+                                _gpsLat = lat; _gpsLon = lon; _gpsValid = true;
+                            }
+                        }
+                    }
+                    _modem.sendAT("+CCHSTART");
+                    _modem.waitResponse(3000);
                 }
-                _modem.sendAT("+CCHSTART");
-                _modem.waitResponse(3000);
+            } else if (_wsUseLte && wsProxyConnected && lteReconnFails > 0) {
+                // Connexion rétablie — remettre le compteur à zéro
+                Serial.printf("[ws-lte] reconnecté après %d tentatives\n", lteReconnFails);
+                lteReconnFails = 0;
             }
         }
         // RSSI LTE : mis à jour uniquement lors des reconnexions (AT+CSQ
