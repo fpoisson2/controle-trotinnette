@@ -254,6 +254,17 @@ static void sleepResetActivity() {
     if (_sleepPowerState != POWER_ACTIVE) {
         Serial.printf("[sleep] activité détectée — retour ACTIF (était %s)\n",
                       sleepGetPowerStateName());
+
+        // Réactiver I2S si désactivé par la veille
+        if (_sleepI2SDisabled) {
+            _sleepI2SDisabled = false;
+            audioInitI2S();
+            Serial.println("[sleep] I2S réactivé");
+        }
+
+        // Désactiver WiFi power save
+        esp_wifi_set_ps(WIFI_PS_NONE);
+
         _sleepPowerState = POWER_ACTIVE;
     }
 }

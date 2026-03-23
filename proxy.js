@@ -1538,8 +1538,14 @@ esp32Wss.on('connection', (ws) => {
   const espPing = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) ws.ping();
   }, 20000);
-  ws.on('close', () => clearInterval(espPing));
-  ws.on('error', () => clearInterval(espPing));
+  ws.on('close', (code, reason) => {
+    clearInterval(espPing);
+    console.log(`[esp32-ws] close code=${code} reason=${reason?.toString() || ''} scooter=${scooterId}`);
+  });
+  ws.on('error', (err) => {
+    clearInterval(espPing);
+    console.error(`[esp32-ws] erreur WebSocket: ${err.message} scooter=${scooterId}`);
+  });
 
   ws.on('message', (data, isBinary) => {
     if (isBinary) {

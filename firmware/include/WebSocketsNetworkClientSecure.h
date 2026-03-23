@@ -155,10 +155,11 @@ public:
         int a = activeSSL().available();
 #if LTE_ENABLED
         if (_isLte && a > 0) _lastDataReceived = millis();
-        // Timeout silencieux : si aucune donnée reçue depuis 120s, connexion morte
+        // Timeout silencieux : si aucune donnée reçue depuis 60s, connexion morte
+        // (le proxy envoie des pings toutes les 20s, donc 60s = 3 pings manqués)
         if (_isLte && _sslConnected && _lastDataReceived > 0 &&
-            millis() - _lastDataReceived > 120000) {
-            Serial.println("[ws-net] timeout silence 90s — connexion morte");
+            millis() - _lastDataReceived > 60000) {
+            Serial.println("[ws-net] timeout silence 60s — connexion morte");
             _sslConnected = false;
         }
 #endif
