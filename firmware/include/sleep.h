@@ -258,12 +258,14 @@ static void sleepResetActivity() {
         // Réactiver I2S si désactivé par la veille
         if (_sleepI2SDisabled) {
             _sleepI2SDisabled = false;
-            audioInitI2S();
-            Serial.println("[sleep] I2S réactivé");
+            audioStartI2S();  // Reprendre le driver existant (pas réinstaller)
+            Serial.println("[sleep] I2S réactivé (start)");
         }
 
-        // Désactiver WiFi power save
-        esp_wifi_set_ps(WIFI_PS_NONE);
+        // Désactiver WiFi power save (seulement si WiFi actif)
+        if (!_wsUseLte) {
+            esp_wifi_set_ps(WIFI_PS_NONE);
+        }
 
         _sleepPowerState = POWER_ACTIVE;
     }
@@ -326,14 +328,16 @@ static void sleepCheckInactivity(int throttleVal, int brakeVal,
                 Serial.println("[sleep] transition → VEILLE LÉGÈRE (2 min inactif)");
                 _sleepPowerState = POWER_IDLE_LIGHT;
 
-                // Réduire la consommation : WiFi power save
-                esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
-                Serial.println("[sleep] WiFi power save activé");
+                // Réduire la consommation : WiFi power save (seulement si WiFi actif)
+                if (!_wsUseLte) {
+                    esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+                    Serial.println("[sleep] WiFi power save activé");
+                }
 
-                // Marquer I2S comme devant être désactivé
-                // (le code appelant doit appeler i2s_driver_uninstall)
+                // Arrêter I2S (micro) pour économiser du courant
+                audioStopI2S();
                 _sleepI2SDisabled = true;
-                Serial.println("[sleep] I2S sera désactivé par le code appelant");
+                Serial.println("[sleep] I2S arrêté");
             }
             break;
 
