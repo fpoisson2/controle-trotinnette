@@ -177,14 +177,12 @@ function flushAudioToEsp() {
 }
 
 function sendAudioToEsp(pcm8buf) {
-  audioAccum.push(pcm8buf);
-  audioAccumBytes += pcm8buf.length;
-  // Flush si assez accumulé (~12000 bytes = 1.5s à 8kHz) ou par timer
-  if (audioAccumBytes >= 12000) {
-    if (audioFlushTimer) { clearTimeout(audioFlushTimer); audioFlushTimer = null; }
-    flushAudioToEsp();
-  } else if (!audioFlushTimer) {
-    audioFlushTimer = setTimeout(flushAudioToEsp, AUDIO_FLUSH_MS);
+  // Envoyer en chunks de 1KB binaires (pas d'accumulation — streaming temps réel)
+  const selected = getSelectedScooter();
+  if (!selected || selected.ws.readyState !== WebSocket.OPEN) return;
+  const CHUNK = 1024;
+  for (let i = 0; i < pcm8buf.length; i += CHUNK) {
+    try { selected.ws.send(pcm8buf.slice(i, i + CHUNK), { binary: true }); } catch (_) {}
   }
 }
 
@@ -1740,10 +1738,28 @@ esp32Wss.on('connection', (ws) => {
     if (isBinary) {
       const entry = scooters.get(scooterId);
 
-      // Mode streaming LTE : accumuler les chunks ADPCM pendant le PTT
+      // Mode streaming LTE : décoder ADPCM et forwarder au Realtime API en temps réel
       if (entry && entry.voiceStreaming) {
-        entry.chainedBuf.push(Buffer.from(data));
-        entry.chainedReceived += data.length;
+        if (scooterId === selectedScooterId && openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+          // Décoder ce chunk ADPCM → PCM16
+          // Chaque chunk a un header ADPCM de 4 bytes
+          const chunk = Buffer.from(data);
+          const nSamples = (chunk.length - 4) * 2;  // 2 samples par byte (nibbles)
+          if (nSamples > 0) {
+            const pcm16 = decodeAdpcm(chunk, nSamples);
+            // Forward au Realtime API en base64
+            openaiWs.send(JSON.stringify({
+              type: 'input_audio_buffer.append',
+              audio: pcm16.toString('base64')
+            }));
+          }
+        }
+        // Relayer aux clients debug-audio
+        for (const c of debugAudioClients) {
+          if (c.readyState === WebSocket.OPEN) {
+            try { c.send(data, { binary: true }); } catch (_) {}
+          }
+        }
         return;
       }
 
@@ -1942,40 +1958,28 @@ esp32Wss.on('connection', (ws) => {
           }
 
         } else if (msg.type === 'voice_start') {
-          // Streaming PTT : début d'enregistrement, accumuler les chunks ADPCM
+          // Streaming PTT → forward audio en temps réel au Realtime API
           const entry = scooters.get(scooterId);
           if (entry) {
             entry.voiceStreaming = true;
             entry.chainedFormat = msg.format || 'adpcm';
-            entry.chainedBuf = [];
-            entry.chainedReceived = 0;
             entry.voiceStartTime = Date.now();
-            console.log(`[stream] début enregistrement ${entry.chainedFormat} de ${scooterId}`);
+            audioFromEsp = true;  // réponse audio → ESP32
+            console.log(`[stream] début PTT → Realtime API (${entry.chainedFormat})`);
           }
 
         } else if (msg.type === 'voice_end') {
-          // Streaming PTT : fin d'enregistrement → décoder et traiter
+          // Fin PTT → commit audio buffer au Realtime API
           const entry = scooters.get(scooterId);
           if (entry && entry.voiceStreaming) {
             entry.voiceStreaming = false;
-            const uploadMs = Date.now() - entry.voiceStartTime;
-            const fullAdpcm = Buffer.concat(entry.chainedBuf);
-            const nSamples = msg.samples || 0;
-            console.log(`[stream] fin enregistrement: ${fullAdpcm.length} bytes ADPCM (${nSamples} samples) reçus en ${uploadMs}ms de ${scooterId}`);
+            const dur = Date.now() - entry.voiceStartTime;
+            console.log(`[stream] fin PTT (${dur}ms, ${msg.samples || 0} samples) → commit Realtime`);
 
-            // Décoder ADPCM multi-blocs → PCM16
-            let pcm16;
-            if (entry.chainedFormat === 'adpcm' && nSamples > 0) {
-              pcm16 = decodeAdpcmMultiBlock(fullAdpcm, nSamples);
-              console.log(`[stream] ADPCM décodé → ${pcm16.length} bytes PCM16`);
-            } else {
-              pcm16 = fullAdpcm;
-            }
-            entry.chainedBuf = null;
-            entry.chainedReceived = 0;
-
-            if (scooterId === selectedScooterId) {
-              processChainedAudio(scooterId, pcm16);
+            // Commit le buffer audio pour déclencher la réponse
+            if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+              openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+              openaiWs.send(JSON.stringify({ type: 'response.create' }));
             }
           }
 
