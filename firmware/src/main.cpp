@@ -606,8 +606,9 @@ static void taskCapture(void *) {
                         (unsigned)lteAudioLen);
                     wsProxy.sendTXT(sig);
 
-                    // Découper en chunks de 2KB pour ne pas surcharger le modem SSL
+                    // Découper en chunks de 2KB avec 50ms de pause pour le modem SSL
                     const size_t CHUNK_SZ = 2048;
+                    const uint32_t CHUNK_DELAY_MS = 50;
                     size_t sent = 0;
                     int chunks = 0;
                     while (sent < lteAudioLen && wsProxyConnected) {
@@ -616,11 +617,11 @@ static void taskCapture(void *) {
                         wsProxy.sendBIN(lteAudioBuf + sent, toSend);
                         sent += toSend;
                         chunks++;
-                        wsProxy.loop();  // Laisser le modem respirer
-                        vTaskDelay(pdMS_TO_TICKS(5));
+                        vTaskDelay(pdMS_TO_TICKS(CHUNK_DELAY_MS));
                     }
-                    Serial.printf("[lte-audio] envoi %u bytes en %d chunks (%u ms audio)\n",
-                        (unsigned)lteAudioLen, chunks, (unsigned)(lteAudioLen / 32));
+                    Serial.printf("[lte-audio] envoi %u/%u bytes en %d chunks (%u ms audio)\n",
+                        (unsigned)sent, (unsigned)lteAudioLen, chunks,
+                        (unsigned)(lteAudioLen / 32));
                     lteAudioLen = 0;
                     audioBeep(600.0f, 30);  // bip : en cours de traitement
                 }

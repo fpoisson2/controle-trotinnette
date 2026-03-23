@@ -295,12 +295,35 @@ function resample24to8(pcm16_24k) {
   return pcm8;
 }
 
+// Convertir PCM16 brut en WAV (header RIFF + données)
+function pcm16ToWav(pcm16Buffer, sampleRate = 16000, channels = 1, bitsPerSample = 16) {
+  const dataSize = pcm16Buffer.length;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);              // chunk size
+  header.writeUInt16LE(1, 20);               // PCM format
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * channels * bitsPerSample / 8, 28);
+  header.writeUInt16LE(channels * bitsPerSample / 8, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+  return Buffer.concat([header, pcm16Buffer]);
+}
+
 async function processChainedAudio(scooterId, pcm16Buffer) {
   const entry = scooters.get(scooterId);
   if (!entry) return;
 
   const durationMs = Math.round(pcm16Buffer.length / 32);
   console.log(`[chained] traitement audio ${pcm16Buffer.length} bytes (${durationMs}ms)`);
+
+  // Convertir PCM16 brut en WAV pour l'API Chat Completions
+  const wavBuffer = pcm16ToWav(pcm16Buffer);
 
   // Construire les messages avec historique
   const messages = [
@@ -310,7 +333,7 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
       role: 'user',
       content: [{
         type: 'input_audio',
-        input_audio: { data: pcm16Buffer.toString('base64'), format: 'pcm16' }
+        input_audio: { data: wavBuffer.toString('base64'), format: 'wav' }
       }]
     }
   ];
