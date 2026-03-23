@@ -596,10 +596,10 @@ class TinyGsmA76xxSSL : public TinyGsmA76xx<TinyGsmA76xxSSL>,
     if (!sockets[mux]->sock_connected) { return 0; }
 
     // Envoyer AT+CCHRECV? seulement si on a reçu un RECV EVENT (got_data)
-    // ou périodiquement (toutes les 500ms) pour ne pas bombarder le modem
+    // ou périodiquement (toutes les 50ms) pour débit LTE acceptable
     static uint32_t _lastRecvCheck = 0;
     bool needCheck = sockets[mux]->got_data;
-    if (!needCheck && millis() - _lastRecvCheck > 500) {
+    if (!needCheck && millis() - _lastRecvCheck > 50) {
       needCheck = true;
     }
     if (!needCheck) {
