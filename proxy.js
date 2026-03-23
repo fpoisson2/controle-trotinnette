@@ -359,6 +359,9 @@ function pcm16ToWav(pcm16Buffer, sampleRate = 16000, channels = 1, bitsPerSample
   return Buffer.concat([header, pcm16Buffer]);
 }
 
+const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+const GROQ_LLM_MODEL = process.env.GROQ_LLM_MODEL || 'openai/gpt-oss-20b';
+
 async function processChainedAudio(scooterId, pcm16Buffer) {
   const entry = scooters.get(scooterId);
   if (!entry) return;
@@ -367,58 +370,77 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
   const durationMs = Math.round(pcm16Buffer.length / 32);
   console.log(`[chained] traitement audio ${pcm16Buffer.length} bytes (${durationMs}ms)`);
 
-  // Convertir PCM16 brut en WAV pour l'API Chat Completions
+  // Convertir PCM16 brut en WAV pour Whisper
   const wavBuffer = pcm16ToWav(pcm16Buffer);
 
-  // Construire les messages avec historique
+  // ── Étape 1 : STT via Groq Whisper ────────────────────────────────────────
+  const t1 = Date.now();
+  let userText = '';
+  try {
+    const formData = new FormData();
+    formData.append('file', new Blob([wavBuffer], { type: 'audio/wav' }), 'audio.wav');
+    formData.append('model', 'whisper-large-v3-turbo');
+    formData.append('language', 'fr');
+    formData.append('response_format', 'json');
+
+    const sttRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}` },
+      body: formData
+    });
+    if (!sttRes.ok) {
+      const err = await sttRes.text();
+      console.error(`[groq-stt] erreur ${sttRes.status}: ${err.substring(0, 200)}`);
+      return;
+    }
+    const sttResult = await sttRes.json();
+    userText = sttResult.text || '';
+  } catch (err) {
+    console.error(`[groq-stt] erreur: ${err.message}`);
+    return;
+  }
+  const sttMs = Date.now() - t1;
+  console.log(`[timing] STT=${sttMs}ms | "${userText}"`);
+  if (!userText.trim()) { console.warn('[chained] transcription vide'); return; }
+
+  // Historique : ajouter le message utilisateur
+  entry.chainedHistory.push({ role: 'user', content: userText });
+
+  // ── Étape 2 : LLM via Groq ────────────────────────────────────────────────
+  const t2 = Date.now();
   const messages = [
     { role: 'system', content: CHAINED_SYSTEM_PROMPT },
-    ...entry.chainedHistory,
-    {
-      role: 'user',
-      content: [{
-        type: 'input_audio',
-        input_audio: { data: wavBuffer.toString('base64'), format: 'wav' }
-      }]
-    }
+    ...entry.chainedHistory
   ];
-
-  // Chat Completions tools (format Chat API, pas Realtime)
   const tools = [
     { type: 'function', function: { name: TOOL_SCHEMA.name, description: TOOL_SCHEMA.description, parameters: TOOL_SCHEMA.parameters } },
     { type: 'function', function: { name: TELEMETRY_TOOL_SCHEMA.name, description: TELEMETRY_TOOL_SCHEMA.description, parameters: TELEMETRY_TOOL_SCHEMA.parameters } }
   ];
 
+  let aiText = '';
   try {
-    let response = await fetch('https://api.openai.com/v1/chat/completions', {
+    let response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gpt-audio-1.5',
-        modalities: ['text', 'audio'],
-        audio: { voice: 'alloy', format: 'pcm16' },
-        messages,
-        tools,
-        tool_choice: 'auto'
+        model: GROQ_LLM_MODEL,
+        messages, tools, tool_choice: 'auto',
+        max_tokens: 256
       })
     });
-
     if (!response.ok) {
       const err = await response.text();
-      console.error(`[chained] API erreur ${response.status}: ${err.substring(0, 200)}`);
+      console.error(`[groq-llm] erreur ${response.status}: ${err.substring(0, 200)}`);
       return;
     }
-
     let result = await response.json();
     let choice = result.choices?.[0];
     if (!choice) return;
 
-    // Gérer les tool calls (peut nécessiter un 2e appel)
+    // Gérer les tool calls
     if (choice.message?.tool_calls?.length) {
-      const assistantMsg = choice.message;
-      messages.push(assistantMsg);
-
-      for (const tc of assistantMsg.tool_calls) {
+      messages.push(choice.message);
+      for (const tc of choice.message.tool_calls) {
         let toolResult = {};
         if (tc.function.name === 'commande_trottinette') {
           const args = JSON.parse(tc.function.arguments);
@@ -431,99 +453,99 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
         }
         messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(toolResult) });
       }
-
-      // 2e appel pour obtenir la réponse audio finale
-      response = await fetch('https://api.openai.com/v1/chat/completions', {
+      // 2e appel pour obtenir la réponse texte
+      response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'gpt-audio-1.5',
-          modalities: ['text', 'audio'],
-          audio: { voice: 'alloy', format: 'pcm16' },
-          messages, tools, tool_choice: 'auto'
-        })
+        headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: GROQ_LLM_MODEL, messages, max_tokens: 256 })
       });
-      if (!response.ok) { console.error(`[chained] 2e appel erreur ${response.status}`); return; }
+      if (!response.ok) { console.error(`[groq-llm] 2e appel erreur ${response.status}`); return; }
       result = await response.json();
       choice = result.choices?.[0];
       if (!choice) return;
     }
-
-    // Traiter la réponse audio
-    const msg = choice.message;
-    const transcript = msg.audio?.transcript || msg.content || '';
-    const apiMs = Date.now() - t0;
-    console.log(`[timing] API=${apiMs}ms | réponse: "${transcript}"`);
-
-    // Broadcast au dashboard
-    if (transcript) broadcastSSE({ type: 'ai_response', text: transcript });
-
-    // Historique conversation (garder les 10 derniers tours)
-    if (msg.audio?.id) {
-      entry.chainedHistory.push({ role: 'assistant', audio: { id: msg.audio.id } });
-    } else if (msg.content) {
-      entry.chainedHistory.push({ role: 'assistant', content: msg.content });
-    }
-    if (entry.chainedHistory.length > 20) {
-      entry.chainedHistory = entry.chainedHistory.slice(-10);
-    }
-
-    // Envoyer l'audio à l'ESP32 (re-fetch entry car async)
-    const freshEntry = scooters.get(scooterId);
-    const wsAlive = freshEntry && freshEntry.ws.readyState === WebSocket.OPEN;
-    console.log(`[chained] audio data=${!!msg.audio?.data} ws=${wsAlive ? 'OPEN' : 'DEAD'} scooter=${scooterId}`);
-
-    if (msg.audio?.data) {
-      const pcm16_24k = Buffer.from(msg.audio.data, 'base64');
-      const pcm8 = resample24to8(pcm16_24k);
-      console.log(`[chained] audio: ${pcm16_24k.length} → ${pcm8.length} bytes PCM8 8kHz`);
-
-      // Dashboard : audio 24kHz original
-      const b64 = msg.audio.data;
-      const CHUNK = 4096;
-      for (let i = 0; i < b64.length; i += CHUNK) {
-        const p = `data: ${JSON.stringify({ type: 'audio', data: b64.slice(i, i + CHUNK) })}\n\n`;
-        for (const c of sseClients) { try { c.write(p); } catch (_) {} }
-      }
-
-      // ESP32 : audio PCM8 brut en chunks binaires avec signaux begin/end
-      if (wsAlive) {
-        try {
-          // Signal début : ESP32 bufferise tout avant de jouer
-          freshEntry.ws.send(JSON.stringify({ type: 'audio_begin', size: pcm8.length }));
-
-          const CHUNK = 1024;
-          const DELAY = 5;
-          let sent = 0;
-          for (let i = 0; i < pcm8.length; i += CHUNK) {
-            const fe = scooters.get(scooterId);
-            if (!fe || fe.ws.readyState !== WebSocket.OPEN) break;
-            const chunk = pcm8.slice(i, i + CHUNK);
-            fe.ws.send(chunk, { binary: true });
-            sent++;
-            if (i + CHUNK < pcm8.length) {
-              await new Promise(r => setTimeout(r, DELAY));
-            }
-          }
-
-          // Signal fin : ESP32 lance la lecture
-          const fe2 = scooters.get(scooterId);
-          if (fe2 && fe2.ws.readyState === WebSocket.OPEN) {
-            fe2.ws.send(JSON.stringify({ type: 'audio_end' }));
-          }
-          console.log(`[chained] audio envoyé à ESP32: ${pcm8.length} bytes en ${sent} chunks + begin/end`);
-        } catch (e) {
-          console.error(`[chained] erreur envoi audio ESP32: ${e.message}`);
-        }
-      } else {
-        console.warn(`[chained] ESP32 déconnecté — audio perdu`);
-      }
-    } else {
-      console.warn(`[chained] pas d'audio dans la réponse API`);
-    }
-
+    aiText = choice.message?.content || '';
   } catch (err) {
-    console.error('[chained] erreur:', err.message);
+    console.error(`[groq-llm] erreur: ${err.message}`);
+    return;
+  }
+  const llmMs = Date.now() - t2;
+  console.log(`[timing] LLM=${llmMs}ms | "${aiText}"`);
+  if (!aiText.trim()) { console.warn('[chained] réponse LLM vide'); return; }
+
+  // Historique : ajouter la réponse assistant
+  entry.chainedHistory.push({ role: 'assistant', content: aiText });
+  if (entry.chainedHistory.length > 20) {
+    entry.chainedHistory = entry.chainedHistory.slice(-10);
+  }
+
+  // Broadcast au dashboard
+  broadcastSSE({ type: 'ai_response', text: aiText });
+
+  // ── Étape 3 : TTS via OpenAI ──────────────────────────────────────────────
+  const t3 = Date.now();
+  let pcm8 = null;
+  try {
+    const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'tts-1',
+        input: aiText,
+        voice: 'alloy',
+        response_format: 'pcm',  // PCM16 24kHz mono
+        speed: 1.0
+      })
+    });
+    if (!ttsRes.ok) {
+      const err = await ttsRes.text();
+      console.error(`[tts] erreur ${ttsRes.status}: ${err.substring(0, 200)}`);
+      return;
+    }
+    const pcm16_24k = Buffer.from(await ttsRes.arrayBuffer());
+    pcm8 = resample24to8(pcm16_24k);
+  } catch (err) {
+    console.error(`[openai-tts] erreur: ${err.message}`);
+    return;
+  }
+  const ttsMs = Date.now() - t3;
+  const totalMs = Date.now() - t0;
+  console.log(`[timing] TTS=${ttsMs}ms | total API=${totalMs}ms | audio ${pcm8.length} bytes PCM8`);
+
+  // Dashboard : audio pour le player web
+  const b64 = pcm8.toString('base64');
+  const SSE_CHUNK = 4096;
+  for (let i = 0; i < b64.length; i += SSE_CHUNK) {
+    const p = `data: ${JSON.stringify({ type: 'audio', data: b64.slice(i, i + SSE_CHUNK) })}\n\n`;
+    for (const c of sseClients) { try { c.write(p); } catch (_) {} }
+  }
+
+  // ESP32 : audio PCM8 brut en chunks binaires avec signaux begin/end
+  const freshEntry = scooters.get(scooterId);
+  const wsAlive = freshEntry && freshEntry.ws.readyState === WebSocket.OPEN;
+  if (wsAlive) {
+    try {
+      freshEntry.ws.send(JSON.stringify({ type: 'audio_begin', size: pcm8.length }));
+      const CHUNK = 1024;
+      const DELAY = 5;
+      let sent = 0;
+      for (let i = 0; i < pcm8.length; i += CHUNK) {
+        const fe = scooters.get(scooterId);
+        if (!fe || fe.ws.readyState !== WebSocket.OPEN) break;
+        fe.ws.send(pcm8.slice(i, i + CHUNK), { binary: true });
+        sent++;
+        if (i + CHUNK < pcm8.length) await new Promise(r => setTimeout(r, DELAY));
+      }
+      const fe2 = scooters.get(scooterId);
+      if (fe2 && fe2.ws.readyState === WebSocket.OPEN) {
+        fe2.ws.send(JSON.stringify({ type: 'audio_end' }));
+      }
+      console.log(`[chained] audio envoyé à ESP32: ${pcm8.length} bytes en ${sent} chunks`);
+    } catch (e) {
+      console.error(`[chained] erreur envoi audio ESP32: ${e.message}`);
+    }
+  } else {
+    console.warn(`[chained] ESP32 déconnecté — audio perdu`);
   }
 }
 
