@@ -43,7 +43,7 @@
     --ptt-active: #d01a1c;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
+  html, body { height: 100%; overscroll-behavior-y: contain; }
   body {
     background: var(--bg);
     color: var(--text);
@@ -689,6 +689,7 @@
       height: 100dvh;
       height: 100vh;
       overflow: hidden;
+      overscroll-behavior-y: contain;
     }
     /* Bloquer le scroll quand un bottom sheet est ouvert */
     body.sheet-active .mobile-layout {
@@ -712,6 +713,21 @@
       min-height: 0;
       overflow: hidden;
     }
+
+    /* Pull-to-refresh */
+    .ptr-indicator {
+      display: none; justify-content: center; align-items: center;
+      height: 0; overflow: hidden;
+      transition: height 0.2s ease;
+      flex-shrink: 0;
+    }
+    .ptr-indicator.visible { display: flex; height: 48px; }
+    .ptr-indicator.refreshing .ptr-spinner { animation: ptr-spin 0.8s linear infinite; }
+    .ptr-spinner {
+      width: 24px; height: 24px; color: var(--accent);
+      transition: transform 0.15s ease;
+    }
+    @keyframes ptr-spin { to { transform: rotate(360deg); } }
 
     .mobile-speed-section {
       display: flex; flex-direction: column;

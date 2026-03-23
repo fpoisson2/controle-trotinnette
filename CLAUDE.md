@@ -59,8 +59,21 @@ pio run -e esp32dev
 
 ### Proxy (depuis la racine)
 
+**IMPORTANT** : apres toute modification de fichiers applicatifs, copier les fichiers modifies dans le conteneur Docker en cours d'execution (pas de rebuild). Si `proxy.js` est modifie, redemarrer le conteneur apres la copie.
+
 ```bash
-# Build et deploiement
+# Copie rapide des fichiers modifies dans le conteneur (pas de rebuild)
+docker cp <fichier> controle-trotinnette-proxy-1:/app/<fichier>
+# Exemples :
+docker cp index.html controle-trotinnette-proxy-1:/app/index.html
+docker cp js/dashboard.js controle-trotinnette-proxy-1:/app/js/dashboard.js
+docker cp css/dashboard.css controle-trotinnette-proxy-1:/app/css/dashboard.css
+docker cp proxy.js controle-trotinnette-proxy-1:/app/proxy.js
+
+# Redemarrer seulement si proxy.js est modifie (fichiers statiques servis a chaud)
+docker compose restart proxy
+
+# Build complet (seulement si les dependances npm changent ou nouveau fichier)
 docker compose build --no-cache proxy && docker compose up -d --force-recreate proxy
 
 # Logs
