@@ -406,10 +406,9 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
 
                 uint32_t buffered = (dacHead - dacTail + DAC_RING_SIZE) & DAC_RING_MASK;
 
-                // Pré-buffer 300ms (8000 × 0.3 = 2400 samples) avant de lancer la lecture
-                // Pré-buffer : attendre ~3s (24000 samples à 8kHz) avant de jouer
-                // pour couvrir le gap de ~1.5s entre les messages LTE
-                if (dacPreBuffering && buffered >= 24000) {
+                // Pré-buffer 0.5s (4000 samples à 8kHz) avant de lancer la lecture
+                // L'audio arrivera en continu via LTE (~500ms entre chunks)
+                if (dacPreBuffering && buffered >= 4000) {
                     dacPreBuffering = false;
                     Serial.printf("[audio] pré-buffer OK (%u samples = %ums)\n",
                         buffered, buffered / 8);

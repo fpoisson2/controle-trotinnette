@@ -444,7 +444,7 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
       if (wsAlive) {
         try {
           const CHUNK = 1024;  // 1KB par chunk
-          const DELAY = 50;    // 50ms entre chaque chunk
+          const DELAY = 5;     // 5ms entre chaque chunk (LTE throttle naturellement)
           let sent = 0;
           for (let i = 0; i < pcm8.length; i += CHUNK) {
             const fe = scooters.get(scooterId);
