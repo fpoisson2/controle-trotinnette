@@ -422,8 +422,12 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
       entry.chainedHistory = entry.chainedHistory.slice(-10);
     }
 
-    // Envoyer l'audio à l'ESP32
-    if (msg.audio?.data && entry.ws.readyState === WebSocket.OPEN) {
+    // Envoyer l'audio à l'ESP32 (re-fetch entry car async)
+    const freshEntry = scooters.get(scooterId);
+    const wsAlive = freshEntry && freshEntry.ws.readyState === WebSocket.OPEN;
+    console.log(`[chained] audio data=${!!msg.audio?.data} ws=${wsAlive ? 'OPEN' : 'DEAD'} scooter=${scooterId}`);
+
+    if (msg.audio?.data) {
       const pcm16_24k = Buffer.from(msg.audio.data, 'base64');
       const pcm8 = resample24to8(pcm16_24k);
       console.log(`[chained] audio: ${pcm16_24k.length} → ${pcm8.length} bytes PCM8 8kHz`);
@@ -436,8 +440,19 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
         for (const c of sseClients) { try { c.write(p); } catch (_) {} }
       }
 
-      // ESP32 : audio PCM8 8kHz binaire (tout d'un coup, pas de streaming)
-      try { entry.ws.send(pcm8); } catch (_) {}
+      // ESP32 : audio PCM8 8kHz binaire
+      if (wsAlive) {
+        try {
+          freshEntry.ws.send(pcm8);
+          console.log(`[chained] audio envoyé à ESP32: ${pcm8.length} bytes`);
+        } catch (e) {
+          console.error(`[chained] erreur envoi audio ESP32: ${e.message}`);
+        }
+      } else {
+        console.warn(`[chained] ESP32 déconnecté — audio perdu`);
+      }
+    } else {
+      console.warn(`[chained] pas d'audio dans la réponse API`);
     }
 
   } catch (err) {

@@ -606,8 +606,8 @@ static void taskCapture(void *) {
                         (unsigned)lteAudioLen);
                     wsProxy.sendTXT(sig);
 
-                    // Découper en chunks de 2KB avec 50ms de pause pour le modem SSL
-                    const size_t CHUNK_SZ = 2048;
+                    // Découper en chunks de 1KB avec 50ms de pause pour le modem SSL
+                    const size_t CHUNK_SZ = 1024;
                     const uint32_t CHUNK_DELAY_MS = 50;
                     size_t sent = 0;
                     int chunks = 0;
