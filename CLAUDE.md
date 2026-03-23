@@ -28,6 +28,11 @@ ESP32 ← commandes (cmd JSON) ← Proxy ← OpenAI ← reconnaissance vocale
 | `firmware/include/config.h` | Pins, seuils ADC, parametres reseau, gains audio |
 | `firmware/include/audio.h` | Capture I2S MEMS + lecture DAC via timer hardware (ring buffer) |
 | `firmware/include/flipsky.h` | Pilote UART natif pour ESC Flipsky FT85BS (protocole FTESC V1.6) |
+| `firmware/include/sleep.h` | Gestion d'energie multi-niveaux (actif, veille legere/profonde, deep sleep) |
+| `firmware/include/connectivity.h` | Gestionnaire WiFi/LTE avec basculement automatique |
+| `firmware/include/modem.h` | Init/connect/disconnect modem SIM7670E, GPS, signal |
+| `firmware/include/WebSocketsNetworkClientSecure.h` | Bridge WiFi/LTE pour lib WebSockets (patch custom) |
+| `firmware/lib/TinyGSM/src/TinyGsmClientA76xxSSL.h` | Driver TinyGSM patche pour A76xx SSL (polling, URC, mux) |
 | `firmware/platformio.ini` | Environnements PlatformIO (USB, OTA local, OTA proxy) |
 | `proxy.js` | Serveur Express + WebSocket (ESP32, OpenAI, debug audio) |
 | `index.html` | Structure HTML du dashboard |
@@ -109,15 +114,31 @@ La telemetrie est ecrite par Core 0 dans un buffer partage et envoyee par Core 1
 ## Protocole WebSocket ESP32 <-> Proxy
 
 **ESP32 vers proxy** (`/ws-esp32`) :
-- Binaire : audio PCM16 16kHz (chunks de 4x512 samples = 128ms)
+- Binaire : audio PCM16 16kHz (chunks de 4x512 samples = 128ms) -- mode WiFi streaming
+- Texte JSON : `{"type":"voice_blob", "size":N}` + chunks binaires 1KB -- mode LTE chained
 - Texte JSON : `{"type":"telemetry", "speed":..., "voltage":..., "locked":bool, ...}`
 - Texte JSON : `{"type":"lock_ack", "locked":bool}` -- confirmation verrouillage
 
 **Proxy vers ESP32** :
-- `{"type":"audio", "data":"<base64 PCM16 24kHz>"}` -- reponse vocale IA
+- Binaire : chunks PCM8 8kHz unsigned 1KB -- reponse vocale IA (mode LTE chained)
+- `{"type":"audio", "data":"<base64 PCM16 24kHz>"}` -- reponse vocale IA (mode WiFi streaming)
 - `{"type":"cmd", "action":"avancer|freiner|arreter|vitesse_*", "intensity":0.0-1.0}` -- commande moteur (bloquee si locked)
 - `{"type":"lock", "locked":true|false}` -- verrouiller/deverrouiller la trottinette
 - `{"type":"ota_begin", "size":N}` + chunks binaires + `{"type":"ota_end"}` -- mise a jour firmware
+
+## Pipeline vocal LTE (mode chained)
+
+En LTE, le streaming Realtime API n'est pas viable (debit AT trop lent). Le mode "chained" utilise l'API Chat Completions avec audio :
+
+1. **PTT enfonce** : ESP32 accumule le PCM16 16kHz dans un buffer (alloue au boot, ~160KB)
+2. **PTT relache** : ESP32 envoie `voice_blob` JSON + chunks binaires 1KB/75ms au proxy
+3. **Proxy** : reassemble les chunks, ajoute header WAV, appelle `gpt-audio-1.5` (Chat Completions)
+4. **Reponse** : proxy recoit PCM16 24kHz, resample en PCM8 8kHz, envoie en chunks binaires 1KB/5ms
+5. **ESP32** : recoit les chunks binaires (WStype_BIN), pre-buffer 0.5s, joue via DAC
+
+**Contraintes debit AT** : chaque chunk = 1 commande AT+CCHSEND/CCHRECV (~100-500ms). Upload ~56KB en ~10s, download ~13KB en ~6.5s. Le buffer RX TinyGSM est 4096 bytes, polling sslAvailable toutes les 50ms.
+
+**Reconnexion LTE** : silence timeout 60s, reset SSL (CCHSTOP+CCHSTART) toutes les 10s si deconnecte, watchdog GPRS toutes les 30s, reboot apres 10 min d'echecs.
 
 ## Verrouillage et courses (libre-service)
 
