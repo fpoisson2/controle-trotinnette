@@ -621,69 +621,58 @@ static void taskCapture(void *) {
             size_t len = audioCaptureChunk(pcmBuf);  // toujours drainer le DMA
 
             if (_wsUseLte) {
-                // ── Mode LTE chained : accumuler tout le PTT, envoyer en un bloc ──
+                // ── Mode LTE streaming : encoder ADPCM et envoyer en temps réel ──
                 static bool     lteWasActive = false;
+                static uint32_t lteSampleCount = 0;   // nombre total de samples envoyés
+                static uint32_t lteStartMs = 0;       // début du PTT
 
-                if (voiceActive && wsProxyConnected && len > 0 && lteAudioBuf) {
+                if (voiceActive && !lteWasActive && wsProxyConnected) {
+                    // PTT vient d'être enfoncé → signal début
+                    adpcmResetEncoder();
+                    lteSampleCount = 0;
+                    lteAudioLen = 0;
+                    lteStartMs = millis();
+                    wsProxy.sendTXT("{\"type\":\"voice_start\",\"format\":\"adpcm\"}");
+                    Serial.println("[stream] PTT enfoncé → voice_start");
+                }
+
+                if (voiceActive && wsProxyConnected && len > 0) {
+                    // Accumuler le PCM16 capturé
                     if (lteAudioLen + len <= lteAudioCap) {
                         memcpy(lteAudioBuf + lteAudioLen, pcmBuf, len);
                         lteAudioLen += len;
                     }
-                    // else: buffer plein, ignorer silencieusement
-                } else if (lteWasActive && !voiceActive && lteAudioLen > 0 && wsProxyConnected) {
-                    // PTT relâché : chrono bout-à-bout
-                    uint32_t t0 = millis();
-                    // Encoder en ADPCM puis envoyer en chunks
-                    size_t nSamples = lteAudioLen / 2;  // PCM16 = 2 bytes/sample
-                    size_t adpcmSize = 4 + (nSamples + 1) / 2;  // header + nibbles
 
-                    // Encoder ADPCM dans la partie libre du buffer (après les données PCM)
-                    uint8_t *adpcmBuf = lteAudioBuf + lteAudioLen;
-                    if (lteAudioLen + adpcmSize <= lteAudioCap) {
-                        adpcmResetEncoder();
-                        size_t encoded = adpcmEncodeBlock((int16_t*)lteAudioBuf, nSamples, adpcmBuf);
-
-                        char sig[96];
-                        snprintf(sig, sizeof(sig),
-                            "{\"type\":\"voice_blob\",\"size\":%u,\"format\":\"adpcm\",\"samples\":%u}",
-                            (unsigned)encoded, (unsigned)nSamples);
-                        wsProxy.sendTXT(sig);
-
-                        Serial.printf("[lte-audio] ADPCM %u → %u bytes (%.1fx)\n",
-                            (unsigned)lteAudioLen, (unsigned)encoded,
-                            (float)lteAudioLen / encoded);
-
-                        // Remplacer le pointeur et la taille pour l'envoi
-                        lteAudioLen = encoded;
-                        // adpcmBuf contient les données à envoyer
-                        // On copie en début de buffer pour simplifier l'envoi
-                        memmove(lteAudioBuf, adpcmBuf, encoded);
-                    } else {
-                        // Pas assez de place pour ADPCM → envoyer PCM brut
-                        char sig[64];
-                        snprintf(sig, sizeof(sig), "{\"type\":\"voice_blob\",\"size\":%u}",
-                            (unsigned)lteAudioLen);
-                        wsProxy.sendTXT(sig);
+                    // Encoder et envoyer quand on a ~4 chunks audio (~128ms = 4096 bytes PCM16)
+                    if (lteAudioLen >= 4096) {
+                        size_t nSamples = lteAudioLen / 2;
+                        uint8_t adpcmChunk[4 + 2048];  // max: header + nSamples/2
+                        size_t encoded = adpcmEncodeBlock((int16_t*)lteAudioBuf, nSamples, adpcmChunk);
+                        wsProxy.sendBIN(adpcmChunk, encoded);
+                        lteSampleCount += nSamples;
+                        lteAudioLen = 0;
+                        vTaskDelay(pdMS_TO_TICKS(20));  // respirer entre les envois
                     }
-
-                    // Découper en chunks de 1KB avec 50ms de pause (ADPCM = peu de chunks)
-                    const size_t CHUNK_SZ = 1024;
-                    const uint32_t CHUNK_DELAY_MS = 50;
-                    size_t sent = 0;
-                    int chunks = 0;
-                    while (sent < lteAudioLen && wsProxyConnected) {
-                        size_t toSend = lteAudioLen - sent;
-                        if (toSend > CHUNK_SZ) toSend = CHUNK_SZ;
-                        wsProxy.sendBIN(lteAudioBuf + sent, toSend);
-                        sent += toSend;
-                        chunks++;
-                        vTaskDelay(pdMS_TO_TICKS(CHUNK_DELAY_MS));
+                } else if (lteWasActive && !voiceActive && wsProxyConnected) {
+                    // PTT relâché → envoyer le reste + signal fin
+                    if (lteAudioLen > 0) {
+                        size_t nSamples = lteAudioLen / 2;
+                        uint8_t adpcmChunk[4 + 2048];
+                        size_t encoded = adpcmEncodeBlock((int16_t*)lteAudioBuf, nSamples, adpcmChunk);
+                        wsProxy.sendBIN(adpcmChunk, encoded);
+                        lteSampleCount += nSamples;
+                        lteAudioLen = 0;
                     }
-                    uint32_t t1 = millis();
-                    Serial.printf("[timing] upload %u bytes en %d chunks = %lu ms\n",
-                        (unsigned)sent, chunks, (unsigned long)(t1 - t0));
-                    lteAudioLen = 0;
-                    audioBeep(600.0f, 30);  // bip : en cours de traitement
+                    char sig[64];
+                    snprintf(sig, sizeof(sig),
+                        "{\"type\":\"voice_end\",\"samples\":%u}",
+                        (unsigned)lteSampleCount);
+                    wsProxy.sendTXT(sig);
+                    uint32_t dur = millis() - lteStartMs;
+                    Serial.printf("[timing] stream %u samples en %lu ms (%.1fs audio)\n",
+                        (unsigned)lteSampleCount, (unsigned long)dur,
+                        lteSampleCount / 16000.0f);
+                    audioBeep(600.0f, 30);
                 }
                 lteWasActive = voiceActive;
             } else {

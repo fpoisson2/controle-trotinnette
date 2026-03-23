@@ -339,6 +339,67 @@ function decodeAdpcm(adpcmBuf, nSamples) {
   return pcm;
 }
 
+// Décoder plusieurs blocs ADPCM concaténés (chaque bloc a son header de 4 bytes)
+function decodeAdpcmMultiBlock(adpcmBuf, totalSamples) {
+  const pcm = Buffer.alloc(totalSamples * 2);
+  let inPos = 0;
+  let outSample = 0;
+
+  while (inPos < adpcmBuf.length - 4 && outSample < totalSamples) {
+    // Lire le header du bloc (4 bytes)
+    let predictor = adpcmBuf.readInt16LE(inPos);
+    let index = adpcmBuf[inPos + 2];
+    if (index > 88) index = 88;
+    inPos += 4;
+
+    // Décoder les nibbles jusqu'au prochain header ou fin
+    while (inPos < adpcmBuf.length && outSample < totalSamples) {
+      // Vérifier si on est au début d'un nouveau bloc (heuristique: prochain header)
+      // Chaque bloc du ESP32 fait ~2052 bytes (4 header + 2048 data)
+      const byteVal = adpcmBuf[inPos++];
+
+      // Nibble bas
+      if (outSample < totalSamples) {
+        const nibble = byteVal & 0x0F;
+        const step = ADPCM_STEP_TABLE[index];
+        let diff = step >> 3;
+        if (nibble & 4) diff += step;
+        if (nibble & 2) diff += step >> 1;
+        if (nibble & 1) diff += step >> 2;
+        if (nibble & 8) predictor -= diff;
+        else predictor += diff;
+        if (predictor > 32767) predictor = 32767;
+        if (predictor < -32768) predictor = -32768;
+        pcm.writeInt16LE(predictor, outSample * 2);
+        outSample++;
+        index += ADPCM_INDEX_TABLE[nibble];
+        if (index < 0) index = 0;
+        if (index > 88) index = 88;
+      }
+
+      // Nibble haut
+      if (outSample < totalSamples) {
+        const nibble = (byteVal >> 4) & 0x0F;
+        const step = ADPCM_STEP_TABLE[index];
+        let diff = step >> 3;
+        if (nibble & 4) diff += step;
+        if (nibble & 2) diff += step >> 1;
+        if (nibble & 1) diff += step >> 2;
+        if (nibble & 8) predictor -= diff;
+        else predictor += diff;
+        if (predictor > 32767) predictor = 32767;
+        if (predictor < -32768) predictor = -32768;
+        pcm.writeInt16LE(predictor, outSample * 2);
+        outSample++;
+        index += ADPCM_INDEX_TABLE[nibble];
+        if (index < 0) index = 0;
+        if (index > 88) index = 88;
+      }
+    }
+  }
+  return pcm.slice(0, outSample * 2);
+}
+
 // Convertir PCM16 brut en WAV (header RIFF + données)
 function pcm16ToWav(pcm16Buffer, sampleRate = 16000, channels = 1, bitsPerSample = 16) {
   const dataSize = pcm16Buffer.length;
@@ -1692,33 +1753,26 @@ esp32Wss.on('connection', (ws) => {
     if (isBinary) {
       const entry = scooters.get(scooterId);
 
-      // Mode chained (LTE) : blob audio en chunks → réassembler puis gpt-audio-1.5
+      // Mode streaming LTE : accumuler les chunks ADPCM pendant le PTT
+      if (entry && entry.voiceStreaming) {
+        entry.chainedBuf.push(Buffer.from(data));
+        entry.chainedReceived += data.length;
+        return;
+      }
+
+      // Mode blob (ancien, backward compatible)
       if (entry && entry.chainedPending) {
-        // Accumuler les chunks binaires
         if (!entry.chainedBuf) entry.chainedBuf = [];
         entry.chainedBuf.push(Buffer.from(data));
         entry.chainedReceived = (entry.chainedReceived || 0) + data.length;
-
-        // Vérifier si on a tout reçu
         if (entry.chainedReceived >= entry.chainedExpectedSize) {
           entry.chainedPending = false;
           let fullBlob = Buffer.concat(entry.chainedBuf);
-          console.log(`[chained] blob complet: ${fullBlob.length} bytes (${entry.chainedBuf.length} chunks) format=${entry.chainedFormat} de ${scooterId}`);
-
-          // Décoder ADPCM → PCM16 si nécessaire
           if (entry.chainedFormat === 'adpcm' && entry.chainedSamples > 0) {
             fullBlob = decodeAdpcm(fullBlob, entry.chainedSamples);
-            console.log(`[chained] ADPCM décodé → ${fullBlob.length} bytes PCM16`);
           }
           entry.chainedBuf = null;
           entry.chainedReceived = 0;
-
-          // Relayer le blob aux clients debug-audio (monitor micro)
-          for (const c of debugAudioClients) {
-            if (c.readyState === WebSocket.OPEN) {
-              try { c.send(fullBlob, { binary: true }); } catch (_) {}
-            }
-          }
           if (scooterId === selectedScooterId) {
             processChainedAudio(scooterId, fullBlob);
           }
@@ -1758,8 +1812,9 @@ esp32Wss.on('connection', (ws) => {
             telemetry: { speed: 0, voltage: 0, current: 0, temp: 0, lat: 0, lon: 0, rssi: -999, conn: 'Aucun' },
             fwVersion: msg.version || null,
             debugMode: false,
-            chainedHistory: [],     // historique conversation pour gpt-audio-1.5
-            chainedPending: false,  // true quand on attend le blob binaire
+            chainedHistory: [],     // historique conversation
+            chainedPending: false,  // true quand on attend le blob binaire (ancien mode)
+            voiceStreaming: false,  // true pendant le streaming PTT temps réel
             connectedAt: Date.now(),
             name: null,
             locked: true  // verrouillée par défaut au démarrage
@@ -1899,8 +1954,46 @@ esp32Wss.on('connection', (ws) => {
             }).catch(err => console.error(`[wifi-geo] erreur: ${err.message}`));
           }
 
+        } else if (msg.type === 'voice_start') {
+          // Streaming PTT : début d'enregistrement, accumuler les chunks ADPCM
+          const entry = scooters.get(scooterId);
+          if (entry) {
+            entry.voiceStreaming = true;
+            entry.chainedFormat = msg.format || 'adpcm';
+            entry.chainedBuf = [];
+            entry.chainedReceived = 0;
+            entry.voiceStartTime = Date.now();
+            console.log(`[stream] début enregistrement ${entry.chainedFormat} de ${scooterId}`);
+          }
+
+        } else if (msg.type === 'voice_end') {
+          // Streaming PTT : fin d'enregistrement → décoder et traiter
+          const entry = scooters.get(scooterId);
+          if (entry && entry.voiceStreaming) {
+            entry.voiceStreaming = false;
+            const uploadMs = Date.now() - entry.voiceStartTime;
+            const fullAdpcm = Buffer.concat(entry.chainedBuf);
+            const nSamples = msg.samples || 0;
+            console.log(`[stream] fin enregistrement: ${fullAdpcm.length} bytes ADPCM (${nSamples} samples) reçus en ${uploadMs}ms de ${scooterId}`);
+
+            // Décoder ADPCM multi-blocs → PCM16
+            let pcm16;
+            if (entry.chainedFormat === 'adpcm' && nSamples > 0) {
+              pcm16 = decodeAdpcmMultiBlock(fullAdpcm, nSamples);
+              console.log(`[stream] ADPCM décodé → ${pcm16.length} bytes PCM16`);
+            } else {
+              pcm16 = fullAdpcm;
+            }
+            entry.chainedBuf = null;
+            entry.chainedReceived = 0;
+
+            if (scooterId === selectedScooterId) {
+              processChainedAudio(scooterId, pcm16);
+            }
+          }
+
         } else if (msg.type === 'voice_blob') {
-          // Signal du mode chained LTE : les prochains messages binaires forment un blob audio
+          // Backward compatible : ancien mode blob
           const entry = scooters.get(scooterId);
           if (entry) {
             entry.chainedPending = true;
@@ -1909,7 +2002,6 @@ esp32Wss.on('connection', (ws) => {
             entry.chainedSamples = msg.samples || 0;
             entry.chainedBuf = [];
             entry.chainedReceived = 0;
-            console.log(`[chained] attente blob ${entry.chainedFormat} ${msg.size} bytes (chunked) de ${scooterId}`);
           }
 
         } else if (msg.type === 'lock_ack') {
