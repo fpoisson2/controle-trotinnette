@@ -275,10 +275,10 @@ function sendScooterCmd(action, intensity) {
 // ─── Mode chained : gpt-audio-1.5 pour LTE (audio in → audio out) ────────────
 const CHAINED_SYSTEM_PROMPT =
   'Tu es l\'assistante vocale d\'une trottinette électrique. ' +
-  'Réponds TOUJOURS en français, en 1-2 phrases courtes maximum.\n' +
-  'Pour toute question sur la batterie, vitesse, tension, température → appelle lire_telemetrie\n' +
-  'Pour tout mouvement (avance, freine, stop, vitesse) → appelle commande_trottinette\n' +
-  'Appelle l\'outil PUIS confirme brièvement le résultat.';
+  'RÈGLE ABSOLUE : réponds en maximum 10 mots. Jamais plus. Sois ultra-concise.\n' +
+  'Pour batterie/vitesse/tension/température → appelle lire_telemetrie\n' +
+  'Pour mouvement (avance, freine, stop, vitesse) → appelle commande_trottinette\n' +
+  'Confirme en quelques mots après l\'outil.';
 
 // Resampler PCM16 24kHz → PCM8 unsigned 8kHz (partagé entre Realtime et Chained)
 function resample24to8(pcm16_24k) {
@@ -547,38 +547,25 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
   const t3 = Date.now();
   let pcm8 = null;
   try {
-    // TTS via Piper local (PCM16 22050 Hz) — ultra-rapide ~50ms
-    const pcm16_22k = await new Promise((resolve, reject) => {
-      const { spawn } = require('child_process');
-      const piper = spawn('piper', [
-        '--model', '/usr/local/piper/voices/fr_FR-siwis-medium.onnx',
-        '--output-raw', '--quiet'
-      ]);
-      const chunks = [];
-      piper.stdout.on('data', (c) => chunks.push(c));
-      piper.stderr.on('data', (d) => {
-        const msg = d.toString().trim();
-        if (msg) console.error('[piper]', msg);
-      });
-      piper.on('close', (code) => {
-        if (code === 0) resolve(Buffer.concat(chunks));
-        else reject(new Error(`Piper exit ${code}`));
-      });
-      piper.on('error', reject);
-      piper.stdin.write(aiText);
-      piper.stdin.end();
+    // TTS via OpenAI tts-1 (le plus rapide cloud en français)
+    const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'tts-1',
+        input: aiText,
+        voice: 'alloy',
+        response_format: 'pcm',
+        speed: 1.0
+      })
     });
-
-    // Resample 22050 Hz → 8000 Hz PCM8 unsigned pour le DAC ESP32
-    const nSamples22k = pcm16_22k.length / 2;
-    const nSamples8k = Math.floor(nSamples22k * 8000 / 22050);
-    const pcm8Buf = Buffer.alloc(nSamples8k);
-    for (let i = 0; i < nSamples8k; i++) {
-      const srcIdx = Math.floor(i * 22050 / 8000);
-      const sample = pcm16_22k.readInt16LE(Math.min(srcIdx * 2, pcm16_22k.length - 2));
-      pcm8Buf[i] = Math.max(0, Math.min(255, Math.round(sample / 256 + 128)));
+    if (!ttsRes.ok) {
+      const err = await ttsRes.text();
+      console.error(`[tts] erreur ${ttsRes.status}: ${err.substring(0, 200)}`);
+      return;
     }
-    pcm8 = pcm8Buf;
+    const pcm16_24k = Buffer.from(await ttsRes.arrayBuffer());
+    pcm8 = resample24to8(pcm16_24k);
   } catch (err) {
     console.error(`[openai-tts] erreur: ${err.message}`);
     return;
