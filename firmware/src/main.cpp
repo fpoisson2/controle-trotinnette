@@ -600,14 +600,27 @@ static void taskCapture(void *) {
                     }
                     // else: buffer plein, ignorer silencieusement
                 } else if (lteWasActive && !voiceActive && lteAudioLen > 0 && wsProxyConnected) {
-                    // PTT relâché : envoyer signal + blob complet
+                    // PTT relâché : envoyer signal + blob en chunks (LTE max ~2KB par frame)
                     char sig[64];
                     snprintf(sig, sizeof(sig), "{\"type\":\"voice_blob\",\"size\":%u}",
                         (unsigned)lteAudioLen);
                     wsProxy.sendTXT(sig);
-                    wsProxy.sendBIN(lteAudioBuf, lteAudioLen);
-                    Serial.printf("[lte-audio] envoi blob %u bytes (%u ms)\n",
-                        (unsigned)lteAudioLen, (unsigned)(lteAudioLen / 32));
+
+                    // Découper en chunks de 2KB pour ne pas surcharger le modem SSL
+                    const size_t CHUNK_SZ = 2048;
+                    size_t sent = 0;
+                    int chunks = 0;
+                    while (sent < lteAudioLen && wsProxyConnected) {
+                        size_t toSend = lteAudioLen - sent;
+                        if (toSend > CHUNK_SZ) toSend = CHUNK_SZ;
+                        wsProxy.sendBIN(lteAudioBuf + sent, toSend);
+                        sent += toSend;
+                        chunks++;
+                        wsProxy.loop();  // Laisser le modem respirer
+                        vTaskDelay(pdMS_TO_TICKS(5));
+                    }
+                    Serial.printf("[lte-audio] envoi %u bytes en %d chunks (%u ms audio)\n",
+                        (unsigned)lteAudioLen, chunks, (unsigned)(lteAudioLen / 32));
                     lteAudioLen = 0;
                     audioBeep(600.0f, 30);  // bip : en cours de traitement
                 }

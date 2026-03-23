@@ -1551,18 +1551,30 @@ esp32Wss.on('connection', (ws) => {
     if (isBinary) {
       const entry = scooters.get(scooterId);
 
-      // Mode chained (LTE) : blob audio complet → gpt-audio-1.5
+      // Mode chained (LTE) : blob audio en chunks → réassembler puis gpt-audio-1.5
       if (entry && entry.chainedPending) {
-        entry.chainedPending = false;
-        console.log(`[chained] blob reçu: ${data.length} bytes de ${scooterId}`);
-        // Relayer le blob aux clients debug-audio (monitor micro)
-        for (const c of debugAudioClients) {
-          if (c.readyState === WebSocket.OPEN) {
-            try { c.send(data, { binary: true }); } catch (_) {}
+        // Accumuler les chunks binaires
+        if (!entry.chainedBuf) entry.chainedBuf = [];
+        entry.chainedBuf.push(Buffer.from(data));
+        entry.chainedReceived = (entry.chainedReceived || 0) + data.length;
+
+        // Vérifier si on a tout reçu
+        if (entry.chainedReceived >= entry.chainedExpectedSize) {
+          entry.chainedPending = false;
+          const fullBlob = Buffer.concat(entry.chainedBuf);
+          console.log(`[chained] blob complet: ${fullBlob.length} bytes (${entry.chainedBuf.length} chunks) de ${scooterId}`);
+          entry.chainedBuf = null;
+          entry.chainedReceived = 0;
+
+          // Relayer le blob aux clients debug-audio (monitor micro)
+          for (const c of debugAudioClients) {
+            if (c.readyState === WebSocket.OPEN) {
+              try { c.send(fullBlob, { binary: true }); } catch (_) {}
+            }
           }
-        }
-        if (scooterId === selectedScooterId) {
-          processChainedAudio(scooterId, Buffer.from(data));
+          if (scooterId === selectedScooterId) {
+            processChainedAudio(scooterId, fullBlob);
+          }
         }
         return;
       }
@@ -1741,11 +1753,14 @@ esp32Wss.on('connection', (ws) => {
           }
 
         } else if (msg.type === 'voice_blob') {
-          // Signal du mode chained LTE : le prochain message binaire est un blob audio complet
+          // Signal du mode chained LTE : les prochains messages binaires forment un blob audio
           const entry = scooters.get(scooterId);
           if (entry) {
             entry.chainedPending = true;
-            console.log(`[chained] attente blob audio ${msg.size} bytes de ${scooterId}`);
+            entry.chainedExpectedSize = msg.size;
+            entry.chainedBuf = [];
+            entry.chainedReceived = 0;
+            console.log(`[chained] attente blob audio ${msg.size} bytes (chunked) de ${scooterId}`);
           }
 
         } else if (msg.type === 'lock_ack') {
