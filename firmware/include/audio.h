@@ -21,7 +21,7 @@
 #include "config.h"
 
 // ── Ring buffer pour la lecture DAC (alimenté par taskCapture, lu par timer ISR)
-#define DAC_RING_SIZE  32768   // ~1.36 s à 24 kHz (power of 2 pour masque rapide)
+#define DAC_RING_SIZE  32768   // ~4s à 8kHz PCM8 (power of 2 pour masque rapide)
 #define DAC_RING_MASK  (DAC_RING_SIZE - 1)
 
 volatile uint8_t  dacRing[DAC_RING_SIZE];
@@ -245,4 +245,77 @@ inline void audioPushBase64(const char *b64, size_t b64Len) {
             dacEnqueueRaw(b64DecodeBuf, outLen);
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  IMA-ADPCM encodeur (4:1 compression PCM16 → 4 bits/sample)
+// ─────────────────────────────────────────────────────────────────────────────
+static const int16_t _adpcmStepTable[89] = {
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31,
+    34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143,
+    157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544,
+    598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707,
+    1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871,
+    5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635,
+    13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+};
+static const int8_t _adpcmIndexTable[16] = {
+    -1, -1, -1, -1, 2, 4, 6, 8,
+    -1, -1, -1, -1, 2, 4, 6, 8
+};
+
+static int32_t _adpcmPredictor = 0;
+static int8_t  _adpcmIndex     = 0;
+
+inline void adpcmResetEncoder() {
+    _adpcmPredictor = 0;
+    _adpcmIndex     = 0;
+}
+
+// Encode un sample PCM16 → nibble 4 bits
+static inline uint8_t adpcmEncodeSample(int16_t sample) {
+    int32_t diff = sample - _adpcmPredictor;
+    uint8_t nibble = 0;
+    if (diff < 0) { nibble = 8; diff = -diff; }
+
+    int16_t step = _adpcmStepTable[_adpcmIndex];
+    int32_t diffq = step >> 3;
+
+    if (diff >= step)     { nibble |= 4; diff -= step; diffq += step; }
+    step >>= 1;
+    if (diff >= step)     { nibble |= 2; diff -= step; diffq += step; }
+    step >>= 1;
+    if (diff >= step)     { nibble |= 1;               diffq += step; }
+
+    if (nibble & 8) _adpcmPredictor -= diffq;
+    else            _adpcmPredictor += diffq;
+
+    if (_adpcmPredictor > 32767)  _adpcmPredictor = 32767;
+    if (_adpcmPredictor < -32768) _adpcmPredictor = -32768;
+
+    _adpcmIndex += _adpcmIndexTable[nibble];
+    if (_adpcmIndex < 0)  _adpcmIndex = 0;
+    if (_adpcmIndex > 88) _adpcmIndex = 88;
+
+    return nibble;
+}
+
+// Encode un bloc PCM16 en IMA-ADPCM
+// Format : [predictor:i16][index:u8][pad:u8] + nibbles paquetés (2 par byte)
+// Retourne le nombre de bytes écrits dans out
+inline size_t adpcmEncodeBlock(const int16_t* pcm, size_t nSamples, uint8_t* out) {
+    // Header 4 bytes
+    int16_t pred = (int16_t)_adpcmPredictor;
+    out[0] = pred & 0xFF;
+    out[1] = (pred >> 8) & 0xFF;
+    out[2] = (uint8_t)_adpcmIndex;
+    out[3] = 0;  // réservé
+
+    size_t outIdx = 4;
+    for (size_t i = 0; i < nSamples; i += 2) {
+        uint8_t lo = adpcmEncodeSample(pcm[i]);
+        uint8_t hi = (i + 1 < nSamples) ? adpcmEncodeSample(pcm[i + 1]) : 0;
+        out[outIdx++] = lo | (hi << 4);
+    }
+    return outIdx;
 }

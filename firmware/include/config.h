@@ -109,7 +109,7 @@
 #define LTE_ENABLED         true    // Activer le modem cellulaire
 
 #define MODEM_UART          Serial1
-#define MODEM_BAUD          115200
+#define MODEM_BAUD          460800   // Cible (upgrade depuis 115200 dans modemInit)
 #define MODEM_TX_PIN        26      // ESP32 TX → modem RX
 #define MODEM_RX_PIN        27      // ESP32 RX ← modem TX
 #define MODEM_PWRKEY_PIN    4       // Pin PWRKEY pour allumer/éteindre le modem

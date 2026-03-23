@@ -75,8 +75,8 @@ static bool modemInit() {
     digitalWrite(MODEM_DTR_PIN, LOW);
 #endif
 
-    // Initialiser l'UART du modem
-    MODEM_UART.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX_PIN, MODEM_TX_PIN);
+    // Initialiser l'UART du modem à 115200 (vitesse de base garantie)
+    MODEM_UART.begin(115200, SERIAL_8N1, MODEM_RX_PIN, MODEM_TX_PIN);
     delay(100);
 
     // ── Vérifier si le modem répond déjà (évite un cycle PWRKEY inutile) ────
@@ -122,6 +122,27 @@ static bool modemInit() {
         Serial.println("[modem] ERREUR : init() échoué");
         return false;
     }
+
+    // ── Upgrade baud rate UART (115200 → MODEM_BAUD) ──────────────────────
+#if MODEM_BAUD > 115200
+    {
+        Serial.printf("[modem] upgrade UART %d → %d\n", 115200, MODEM_BAUD);
+        char cmd[32];
+        snprintf(cmd, sizeof(cmd), "+IPR=%d", MODEM_BAUD);
+        _modem.sendAT(cmd);
+        _modem.waitResponse(1000);
+        delay(100);
+        MODEM_UART.updateBaudRate(MODEM_BAUD);
+        delay(100);
+        if (_modem.testAT(3000)) {
+            Serial.printf("[modem] UART %d OK\n", MODEM_BAUD);
+        } else {
+            Serial.printf("[modem] UART %d échoué — retour 115200\n", MODEM_BAUD);
+            MODEM_UART.updateBaudRate(115200);
+            _modem.testAT(3000);
+        }
+    }
+#endif
 
     // Afficher les informations du modem
     String modemInfo = _modem.getModemInfo();

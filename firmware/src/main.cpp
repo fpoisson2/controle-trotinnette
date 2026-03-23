@@ -97,6 +97,11 @@ static int brakeAdcMin    = BRAKE_ADC_MIN;
 static volatile bool telemetryPending = false;
 static char          telemetryJsonBuf[256];
 
+// Pré-buffer audio complet (mode LTE chained)
+static volatile bool     audioFullBuffer    = false;  // true = attendre audio_end avant lecture
+static volatile uint32_t audioExpectedSize  = 0;
+static volatile uint32_t audioReceivedSize  = 0;
+
 // Watchdog Core 1 : Core 1 met à jour ce timestamp, Core 0 vérifie
 static volatile uint32_t core1Heartbeat = 0;
 static uint32_t          core1WatchdogStart = 0;  // début de la surveillance
@@ -246,7 +251,23 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
             if (deserializeJson(doc, payload, length)) break;
             const char *evtype = doc["type"] | "";
 
-            if (strcmp(evtype, "transcript") == 0) {
+            if (strcmp(evtype, "audio_begin") == 0) {
+                // Proxy signale le début d'une réponse audio complète
+                dacHead = dacTail = 0;  // Reset ring buffer
+                dacPreBuffering = true;
+                audioFullBuffer = true;
+                audioReceivedSize = 0;
+                audioExpectedSize = doc["size"] | 0;
+                Serial.printf("[audio] attente %u bytes avant lecture\n",
+                    (unsigned)audioExpectedSize);
+            } else if (strcmp(evtype, "audio_end") == 0) {
+                // Tout l'audio est arrivé → lancer la lecture
+                dacPreBuffering = false;
+                audioFullBuffer = false;
+                uint32_t buffered = (dacHead - dacTail + DAC_RING_SIZE) & DAC_RING_MASK;
+                Serial.printf("[audio] lecture %u samples bufferisés (%ums)\n",
+                    buffered, buffered / 8);
+            } else if (strcmp(evtype, "transcript") == 0) {
                 // stt visible sur la page web, pas besoin de log debug
             } else if (strcmp(evtype, "ai_response") == 0) {
                 // ia response visible sur la page web, pas besoin de log debug
@@ -394,21 +415,22 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 uint32_t now = millis();
                 uint32_t gap = now - lastAudioChunk;
 
-                // Détecter début de nouvelle réponse (gap > 1s)
-                if (gap > 1000) {
+                // Détecter début de nouvelle réponse (gap > 1s, mode WiFi sans signal)
+                if (gap > 1000 && !audioFullBuffer) {
                     audioChunkCount = 0;
                     dacPreBuffering = true;
                 }
                 audioChunkCount++;
+                audioReceivedSize += length;
 
                 // Écrire dans le ring buffer DAC
                 dacEnqueueRaw(payload, length);
 
                 uint32_t buffered = (dacHead - dacTail + DAC_RING_SIZE) & DAC_RING_MASK;
 
-                // Pré-buffer 0.5s (4000 samples à 8kHz) avant de lancer la lecture
-                // L'audio arrivera en continu via LTE (~500ms entre chunks)
-                if (dacPreBuffering && buffered >= 4000) {
+                // Mode full buffer (LTE) : ne pas toucher dacPreBuffering (audio_end le fera)
+                // Mode streaming (WiFi) : pré-buffer 0.5s puis lecture
+                if (!audioFullBuffer && dacPreBuffering && buffered >= 4000) {
                     dacPreBuffering = false;
                     Serial.printf("[audio] pré-buffer OK (%u samples = %ums)\n",
                         buffered, buffered / 8);
@@ -599,11 +621,38 @@ static void taskCapture(void *) {
                     }
                     // else: buffer plein, ignorer silencieusement
                 } else if (lteWasActive && !voiceActive && lteAudioLen > 0 && wsProxyConnected) {
-                    // PTT relâché : envoyer signal + blob en chunks (LTE max ~2KB par frame)
-                    char sig[64];
-                    snprintf(sig, sizeof(sig), "{\"type\":\"voice_blob\",\"size\":%u}",
-                        (unsigned)lteAudioLen);
-                    wsProxy.sendTXT(sig);
+                    // PTT relâché : encoder en ADPCM puis envoyer en chunks
+                    size_t nSamples = lteAudioLen / 2;  // PCM16 = 2 bytes/sample
+                    size_t adpcmSize = 4 + (nSamples + 1) / 2;  // header + nibbles
+
+                    // Encoder ADPCM dans la partie libre du buffer (après les données PCM)
+                    uint8_t *adpcmBuf = lteAudioBuf + lteAudioLen;
+                    if (lteAudioLen + adpcmSize <= lteAudioCap) {
+                        adpcmResetEncoder();
+                        size_t encoded = adpcmEncodeBlock((int16_t*)lteAudioBuf, nSamples, adpcmBuf);
+
+                        char sig[96];
+                        snprintf(sig, sizeof(sig),
+                            "{\"type\":\"voice_blob\",\"size\":%u,\"format\":\"adpcm\",\"samples\":%u}",
+                            (unsigned)encoded, (unsigned)nSamples);
+                        wsProxy.sendTXT(sig);
+
+                        Serial.printf("[lte-audio] ADPCM %u → %u bytes (%.1fx)\n",
+                            (unsigned)lteAudioLen, (unsigned)encoded,
+                            (float)lteAudioLen / encoded);
+
+                        // Remplacer le pointeur et la taille pour l'envoi
+                        lteAudioLen = encoded;
+                        // adpcmBuf contient les données à envoyer
+                        // On copie en début de buffer pour simplifier l'envoi
+                        memmove(lteAudioBuf, adpcmBuf, encoded);
+                    } else {
+                        // Pas assez de place pour ADPCM → envoyer PCM brut
+                        char sig[64];
+                        snprintf(sig, sizeof(sig), "{\"type\":\"voice_blob\",\"size\":%u}",
+                            (unsigned)lteAudioLen);
+                        wsProxy.sendTXT(sig);
+                    }
 
                     // Découper en chunks de 1KB avec 75ms de pause pour le modem SSL
                     const size_t CHUNK_SZ = 1024;

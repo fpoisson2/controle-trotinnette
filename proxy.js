@@ -295,6 +295,50 @@ function resample24to8(pcm16_24k) {
   return pcm8;
 }
 
+// Décoder IMA-ADPCM → PCM16
+const ADPCM_STEP_TABLE = [
+  7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31,
+  34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143,
+  157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544,
+  598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707,
+  1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871,
+  5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635,
+  13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+];
+const ADPCM_INDEX_TABLE = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
+
+function decodeAdpcm(adpcmBuf, nSamples) {
+  // Header: [predictor:i16 LE][index:u8][pad:u8]
+  let predictor = adpcmBuf.readInt16LE(0);
+  let index = adpcmBuf[2];
+  if (index > 88) index = 88;
+
+  const pcm = Buffer.alloc(nSamples * 2);  // PCM16 LE
+  let pos = 4;  // après le header
+  for (let i = 0; i < nSamples; i++) {
+    const byteVal = adpcmBuf[pos + (i >> 1)] || 0;
+    const nibble = (i & 1) ? (byteVal >> 4) & 0x0F : byteVal & 0x0F;
+
+    const step = ADPCM_STEP_TABLE[index];
+    let diff = step >> 3;
+    if (nibble & 4) diff += step;
+    if (nibble & 2) diff += step >> 1;
+    if (nibble & 1) diff += step >> 2;
+    if (nibble & 8) predictor -= diff;
+    else            predictor += diff;
+
+    if (predictor > 32767)  predictor = 32767;
+    if (predictor < -32768) predictor = -32768;
+
+    pcm.writeInt16LE(predictor, i * 2);
+
+    index += ADPCM_INDEX_TABLE[nibble];
+    if (index < 0)  index = 0;
+    if (index > 88) index = 88;
+  }
+  return pcm;
+}
+
 // Convertir PCM16 brut en WAV (header RIFF + données)
 function pcm16ToWav(pcm16Buffer, sampleRate = 16000, channels = 1, bitsPerSample = 16) {
   const dataSize = pcm16Buffer.length;
@@ -440,11 +484,14 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
         for (const c of sseClients) { try { c.write(p); } catch (_) {} }
       }
 
-      // ESP32 : audio PCM8 brut en chunks binaires throttlés (handler WStype_BIN)
+      // ESP32 : audio PCM8 brut en chunks binaires avec signaux begin/end
       if (wsAlive) {
         try {
-          const CHUNK = 1024;  // 1KB par chunk
-          const DELAY = 5;     // 5ms entre chaque chunk (LTE throttle naturellement)
+          // Signal début : ESP32 bufferise tout avant de jouer
+          freshEntry.ws.send(JSON.stringify({ type: 'audio_begin', size: pcm8.length }));
+
+          const CHUNK = 1024;
+          const DELAY = 5;
           let sent = 0;
           for (let i = 0; i < pcm8.length; i += CHUNK) {
             const fe = scooters.get(scooterId);
@@ -456,7 +503,13 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
               await new Promise(r => setTimeout(r, DELAY));
             }
           }
-          console.log(`[chained] audio envoyé à ESP32: ${sent * CHUNK >= pcm8.length ? pcm8.length : sent * CHUNK}/${pcm8.length} bytes en ${sent} chunks`);
+
+          // Signal fin : ESP32 lance la lecture
+          const fe2 = scooters.get(scooterId);
+          if (fe2 && fe2.ws.readyState === WebSocket.OPEN) {
+            fe2.ws.send(JSON.stringify({ type: 'audio_end' }));
+          }
+          console.log(`[chained] audio envoyé à ESP32: ${pcm8.length} bytes en ${sent} chunks + begin/end`);
         } catch (e) {
           console.error(`[chained] erreur envoi audio ESP32: ${e.message}`);
         }
@@ -1611,8 +1664,14 @@ esp32Wss.on('connection', (ws) => {
         // Vérifier si on a tout reçu
         if (entry.chainedReceived >= entry.chainedExpectedSize) {
           entry.chainedPending = false;
-          const fullBlob = Buffer.concat(entry.chainedBuf);
-          console.log(`[chained] blob complet: ${fullBlob.length} bytes (${entry.chainedBuf.length} chunks) de ${scooterId}`);
+          let fullBlob = Buffer.concat(entry.chainedBuf);
+          console.log(`[chained] blob complet: ${fullBlob.length} bytes (${entry.chainedBuf.length} chunks) format=${entry.chainedFormat} de ${scooterId}`);
+
+          // Décoder ADPCM → PCM16 si nécessaire
+          if (entry.chainedFormat === 'adpcm' && entry.chainedSamples > 0) {
+            fullBlob = decodeAdpcm(fullBlob, entry.chainedSamples);
+            console.log(`[chained] ADPCM décodé → ${fullBlob.length} bytes PCM16`);
+          }
           entry.chainedBuf = null;
           entry.chainedReceived = 0;
 
@@ -1808,9 +1867,11 @@ esp32Wss.on('connection', (ws) => {
           if (entry) {
             entry.chainedPending = true;
             entry.chainedExpectedSize = msg.size;
+            entry.chainedFormat = msg.format || 'pcm16';
+            entry.chainedSamples = msg.samples || 0;
             entry.chainedBuf = [];
             entry.chainedReceived = 0;
-            console.log(`[chained] attente blob audio ${msg.size} bytes (chunked) de ${scooterId}`);
+            console.log(`[chained] attente blob ${entry.chainedFormat} ${msg.size} bytes (chunked) de ${scooterId}`);
           }
 
         } else if (msg.type === 'lock_ack') {
