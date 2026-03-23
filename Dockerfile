@@ -3,8 +3,21 @@ FROM node:20-bookworm-slim
 # Python + pip pour PlatformIO, build-essential pour better-sqlite3 (node-gyp)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv git \
-    build-essential \
+    build-essential wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Piper TTS (local, ultra-rapide ~50ms)
+RUN wget -q https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz \
+    && tar -xzf piper_linux_x86_64.tar.gz -C /usr/local \
+    && rm piper_linux_x86_64.tar.gz \
+    && ln -s /usr/local/piper/piper /usr/local/bin/piper
+
+# Voix française Piper (siwis medium, 22050 Hz)
+RUN mkdir -p /usr/local/piper/voices \
+    && wget -q -O /usr/local/piper/voices/fr_FR-siwis-medium.onnx \
+       https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx \
+    && wget -q -O /usr/local/piper/voices/fr_FR-siwis-medium.onnx.json \
+       https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json
 
 # PlatformIO dans un venv
 RUN python3 -m venv /opt/pio && \
