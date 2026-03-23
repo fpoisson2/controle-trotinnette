@@ -440,17 +440,23 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
         for (const c of sseClients) { try { c.write(p); } catch (_) {} }
       }
 
-      // ESP32 : audio PCM8 brut en chunks binaires (handler WStype_BIN)
+      // ESP32 : audio PCM8 brut en chunks binaires throttlés (handler WStype_BIN)
       if (wsAlive) {
         try {
-          const CHUNK = 2048;  // ~256ms de PCM8 8kHz par chunk
+          const CHUNK = 1024;  // 1KB par chunk
+          const DELAY = 50;    // 50ms entre chaque chunk
           let sent = 0;
           for (let i = 0; i < pcm8.length; i += CHUNK) {
+            const fe = scooters.get(scooterId);
+            if (!fe || fe.ws.readyState !== WebSocket.OPEN) break;
             const chunk = pcm8.slice(i, i + CHUNK);
-            freshEntry.ws.send(chunk, { binary: true });
+            fe.ws.send(chunk, { binary: true });
             sent++;
+            if (i + CHUNK < pcm8.length) {
+              await new Promise(r => setTimeout(r, DELAY));
+            }
           }
-          console.log(`[chained] audio envoyé à ESP32: ${pcm8.length} bytes en ${sent} chunks binaires`);
+          console.log(`[chained] audio envoyé à ESP32: ${sent * CHUNK >= pcm8.length ? pcm8.length : sent * CHUNK}/${pcm8.length} bytes en ${sent} chunks`);
         } catch (e) {
           console.error(`[chained] erreur envoi audio ESP32: ${e.message}`);
         }
