@@ -363,6 +363,7 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
   const entry = scooters.get(scooterId);
   if (!entry) return;
 
+  const t0 = Date.now();
   const durationMs = Math.round(pcm16Buffer.length / 32);
   console.log(`[chained] traitement audio ${pcm16Buffer.length} bytes (${durationMs}ms)`);
 
@@ -451,7 +452,8 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
     // Traiter la réponse audio
     const msg = choice.message;
     const transcript = msg.audio?.transcript || msg.content || '';
-    console.log(`[chained] réponse: "${transcript}"`);
+    const apiMs = Date.now() - t0;
+    console.log(`[timing] API=${apiMs}ms | réponse: "${transcript}"`);
 
     // Broadcast au dashboard
     if (transcript) broadcastSSE({ type: 'ai_response', text: transcript });

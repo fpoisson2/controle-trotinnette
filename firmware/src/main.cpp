@@ -101,6 +101,7 @@ static char          telemetryJsonBuf[256];
 static volatile bool     audioFullBuffer    = false;  // true = attendre audio_end avant lecture
 static volatile uint32_t audioExpectedSize  = 0;
 static volatile uint32_t audioReceivedSize  = 0;
+static volatile uint32_t audioBeginMs       = 0;      // chrono réception
 
 // Watchdog Core 1 : Core 1 met à jour ce timestamp, Core 0 vérifie
 static volatile uint32_t core1Heartbeat = 0;
@@ -255,17 +256,26 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 // Proxy signale le début d'une réponse audio complète
                 dacHead = dacTail = 0;  // Reset ring buffer
                 dacPreBuffering = true;
-                audioFullBuffer = true;
                 audioReceivedSize = 0;
                 audioExpectedSize = doc["size"] | 0;
-                Serial.printf("[audio] attente %u bytes avant lecture\n",
-                    (unsigned)audioExpectedSize);
+                audioBeginMs = millis();
+                // Buffer complet seulement si ça tient dans le ring buffer
+                if (audioExpectedSize < DAC_RING_SIZE - 1024) {
+                    audioFullBuffer = true;
+                    Serial.printf("[audio] attente %u bytes avant lecture\n",
+                        (unsigned)audioExpectedSize);
+                } else {
+                    audioFullBuffer = false;
+                    Serial.printf("[audio] streaming %u bytes (trop gros pour buffer %u)\n",
+                        (unsigned)audioExpectedSize, DAC_RING_SIZE);
+                }
             } else if (strcmp(evtype, "audio_end") == 0) {
                 // Tout l'audio est arrivé → lancer la lecture
                 dacPreBuffering = false;
                 audioFullBuffer = false;
                 uint32_t buffered = (dacHead - dacTail + DAC_RING_SIZE) & DAC_RING_MASK;
-                Serial.printf("[audio] lecture %u samples bufferisés (%ums)\n",
+                Serial.printf("[timing] download %u bytes = %lu ms | lecture %u samples (%ums)\n",
+                    (unsigned)audioReceivedSize, (unsigned long)(millis() - audioBeginMs),
                     buffered, buffered / 8);
             } else if (strcmp(evtype, "transcript") == 0) {
                 // stt visible sur la page web, pas besoin de log debug
@@ -621,7 +631,9 @@ static void taskCapture(void *) {
                     }
                     // else: buffer plein, ignorer silencieusement
                 } else if (lteWasActive && !voiceActive && lteAudioLen > 0 && wsProxyConnected) {
-                    // PTT relâché : encoder en ADPCM puis envoyer en chunks
+                    // PTT relâché : chrono bout-à-bout
+                    uint32_t t0 = millis();
+                    // Encoder en ADPCM puis envoyer en chunks
                     size_t nSamples = lteAudioLen / 2;  // PCM16 = 2 bytes/sample
                     size_t adpcmSize = 4 + (nSamples + 1) / 2;  // header + nibbles
 
@@ -654,9 +666,9 @@ static void taskCapture(void *) {
                         wsProxy.sendTXT(sig);
                     }
 
-                    // Découper en chunks de 1KB avec 75ms de pause pour le modem SSL
+                    // Découper en chunks de 1KB avec 50ms de pause (ADPCM = peu de chunks)
                     const size_t CHUNK_SZ = 1024;
-                    const uint32_t CHUNK_DELAY_MS = 75;
+                    const uint32_t CHUNK_DELAY_MS = 50;
                     size_t sent = 0;
                     int chunks = 0;
                     while (sent < lteAudioLen && wsProxyConnected) {
@@ -667,9 +679,9 @@ static void taskCapture(void *) {
                         chunks++;
                         vTaskDelay(pdMS_TO_TICKS(CHUNK_DELAY_MS));
                     }
-                    Serial.printf("[lte-audio] envoi %u/%u bytes en %d chunks (%u ms audio)\n",
-                        (unsigned)sent, (unsigned)lteAudioLen, chunks,
-                        (unsigned)(lteAudioLen / 32));
+                    uint32_t t1 = millis();
+                    Serial.printf("[timing] upload %u bytes en %d chunks = %lu ms\n",
+                        (unsigned)sent, chunks, (unsigned long)(t1 - t0));
                     lteAudioLen = 0;
                     audioBeep(600.0f, 30);  // bip : en cours de traitement
                 }
@@ -1167,7 +1179,7 @@ void loop() {
                 displayNextPage();
                 lastPageChange = millis();
                 sleepResetActivity();
-                Serial.println("[btn] page suivante");
+                // page suivante (pas de log)
             } else if (!btnPageRaw && btnPageState) {
                 btnPageState = false;
             }
