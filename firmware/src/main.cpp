@@ -435,6 +435,11 @@ static uint8_t pcmBuf[MIC_CHUNK_SAMPLES * 2];
 static uint8_t pcmAccum[MIC_CHUNK_SAMPLES * 2 * 2];  // 2 chunks = 64 ms
 static size_t  pcmAccumLen = 0;
 
+// Buffer audio LTE — alloué tôt dans setup() avant fragmentation heap
+static uint8_t *lteAudioBuf = nullptr;
+static size_t   lteAudioLen = 0;
+static size_t   lteAudioCap = 0;
+
 static void taskCapture(void *) {
     wsLog("[capture] tâche démarrée");
     while (true) {
@@ -540,8 +545,14 @@ static void taskCapture(void *) {
 
         // Envoyer télémétrie en attente (écrit par Core0, envoyé ici sur Core1)
         if (telemetryPending && wsProxyConnected) {
-            wsProxy.sendTXT(telemetryJsonBuf);
+            bool ok = wsProxy.sendTXT(telemetryJsonBuf);
             telemetryPending = false;
+            static uint32_t lastTelLog = 0;
+            if (millis() - lastTelLog > 30000) {  // Log toutes les 30s
+                lastTelLog = millis();
+                Serial.printf("[tel] sendTXT=%d len=%u ws=%d\n",
+                    (int)ok, (unsigned)strlen(telemetryJsonBuf), (int)wsProxyConnected);
+            }
         }
         // Envoyer logs debug en attente (vider la queue)
         while (logTail != logHead && wsProxyConnected) {
@@ -565,29 +576,22 @@ static void taskCapture(void *) {
         if (otaMode) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
 
         // ── I2S toujours actif, envoi audio seulement quand PTT enfoncé ──
+        {
+            // Log diagnostic PTT une seule fois par transition
+            static bool lastVoiceLog = false;
+            if (voiceActive != lastVoiceLog) {
+                Serial.printf("[audio-c1] voiceActive=%d i2sOff=%d ws=%d lte=%d\n",
+                    (int)voiceActive, (int)sleepIsI2SDisabled(),
+                    (int)wsProxyConnected, (int)_wsUseLte);
+                lastVoiceLog = voiceActive;
+            }
+        }
         if (!sleepIsI2SDisabled()) {
             size_t len = audioCaptureChunk(pcmBuf);  // toujours drainer le DMA
 
             if (_wsUseLte) {
                 // ── Mode LTE chained : accumuler tout le PTT, envoyer en un bloc ──
-                // Buffer alloué dynamiquement au premier usage
-                static uint8_t *lteAudioBuf = nullptr;
-                static size_t   lteAudioLen = 0;
-                static size_t   lteAudioCap = 0;
                 static bool     lteWasActive = false;
-
-                if (!lteAudioBuf) {
-                    // ~8s de PCM16 16kHz = 256KB
-                    lteAudioCap = 16000 * 2 * 8;
-                    lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
-                    if (!lteAudioBuf) {
-                        // Fallback 4s
-                        lteAudioCap = 16000 * 2 * 4;
-                        lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
-                    }
-                    if (lteAudioBuf) Serial.printf("[lte] buffer audio %u KB alloué\n",
-                        (unsigned)(lteAudioCap / 1024));
-                }
 
                 if (voiceActive && wsProxyConnected && len > 0 && lteAudioBuf) {
                     if (lteAudioLen + len <= lteAudioCap) {
@@ -814,6 +818,26 @@ static void checkConnectivityWatchdog() {
 // ─────────────────────────────────────────────────────────────────────────────
 void setup() {
     delay(500);
+
+    // ── Allocation buffer audio LTE tôt (heap non fragmentée) ──────────────
+#if LTE_ENABLED
+    lteAudioCap = 16000 * 2 * 5;  // 5s de PCM16 16kHz = 160KB
+    lteAudioBuf = (uint8_t*)ps_malloc(lteAudioCap);
+    if (!lteAudioBuf) {
+        lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
+    }
+    if (!lteAudioBuf) {
+        lteAudioCap = 16000 * 2 * 3;  // Fallback 3s = 96KB
+        lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
+    }
+    if (lteAudioBuf) {
+        Serial.printf("[lte] buffer audio %u KB alloué (heap=%u)\n",
+            (unsigned)(lteAudioCap / 1024), (unsigned)esp_get_free_heap_size());
+    } else {
+        Serial.printf("[lte] ERREUR buffer audio (heap=%u)\n",
+            (unsigned)esp_get_free_heap_size());
+    }
+#endif
 
     // ── Détection réveil deep sleep et jingle de boot ──────────────────────
     bool wokeFromSleep = sleepIsWakeFromDeepSleep();
