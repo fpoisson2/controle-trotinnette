@@ -440,11 +440,18 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
         for (const c of sseClients) { try { c.write(p); } catch (_) {} }
       }
 
-      // ESP32 : audio PCM8 8kHz binaire
+      // ESP32 : audio en chunks JSON (même format que le mode streaming)
       if (wsAlive) {
         try {
-          freshEntry.ws.send(pcm8);
-          console.log(`[chained] audio envoyé à ESP32: ${pcm8.length} bytes`);
+          const b64pcm8 = pcm8.toString('base64');
+          const ESP_CHUNK = 2048;  // taille base64 par message
+          let sent = 0;
+          for (let i = 0; i < b64pcm8.length; i += ESP_CHUNK) {
+            const chunk = b64pcm8.slice(i, i + ESP_CHUNK);
+            freshEntry.ws.send(JSON.stringify({ type: 'audio', data: chunk }));
+            sent++;
+          }
+          console.log(`[chained] audio envoyé à ESP32: ${pcm8.length} bytes en ${sent} chunks JSON`);
         } catch (e) {
           console.error(`[chained] erreur envoi audio ESP32: ${e.message}`);
         }
