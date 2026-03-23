@@ -1587,6 +1587,10 @@ esp32Wss.on('connection', (ws) => {
     } else {
       try {
         const msg = JSON.parse(data.toString());
+        // Log tout message reçu de l'ESP32 (debug connexion LTE)
+        if (msg.type !== 'hello') {
+          console.log(`[esp32-rx] ${scooterId} type=${msg.type} len=${data.length}`);
+        }
 
         if (msg.type === 'hello') {
           scooterId = msg.mac || `esp32-${Date.now()}`;
