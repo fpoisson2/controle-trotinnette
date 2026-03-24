@@ -155,12 +155,16 @@ public:
         int a = activeSSL().available();
 #if LTE_ENABLED
         if (_isLte && a > 0) _lastDataReceived = millis();
-        // Timeout silencieux : si aucune donnée reçue depuis 60s, connexion morte
-        // (le proxy envoie des pings toutes les 20s, donc 60s = 3 pings manqués)
+        // Timeout silencieux : si aucune donnée reçue depuis 45s, connexion morte
+        // (le proxy envoie des pings toutes les 20s + ESP32 ping toutes les 25s,
+        //  donc 45s = proxy a manqué au moins 2 cycles de ping)
         if (_isLte && _sslConnected && _lastDataReceived > 0 &&
-            millis() - _lastDataReceived > 60000) {
-            Serial.println("[ws-net] timeout silence 60s — connexion morte");
+            millis() - _lastDataReceived > 45000) {
+            Serial.printf("[ws-net] timeout silence 45s — connexion morte (last=%lus ago)\n",
+                          (unsigned long)(millis() - _lastDataReceived) / 1000);
             _sslConnected = false;
+            // Fermer proprement la session SSL modem pour éviter les zombies
+            _gsmSSL.stop();
         }
 #endif
         return a;

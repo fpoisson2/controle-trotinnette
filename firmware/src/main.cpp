@@ -606,6 +606,21 @@ static void taskCapture(void *) {
 
         if (otaMode) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
 
+        // ── Keepalive ESP32→proxy toutes les 25s (détection connexion morte LTE) ──
+        // En LTE, le heartbeat WebSocket est désactivé et write() peut "réussir"
+        // même si la connexion est morte (buffer modem). Ce ping force un échange
+        // régulier : si le proxy ne répond plus (pings Cloudflare absents),
+        // le silence timeout de 60s dans available() finira par couper.
+#if LTE_ENABLED
+        {
+            static uint32_t lastEspPing = 0;
+            if (_wsUseLte && wsProxyConnected && millis() - lastEspPing > 25000) {
+                lastEspPing = millis();
+                wsProxy.sendTXT("{\"type\":\"ping\"}");
+            }
+        }
+#endif
+
         // ── I2S toujours actif, envoi audio seulement quand PTT enfoncé ──
         {
             // Log diagnostic PTT une seule fois par transition
@@ -1190,10 +1205,11 @@ void loop() {
     musicTick(voiceActive);
 #endif
 
-    // ── Scan WiFi périodique pour géolocalisation (toutes les 60s) ─────────
+    // ── Scan WiFi périodique pour géolocalisation (toutes les 5 min) ────────
     // Le scan utilise le radio WiFi ESP32, pas le modem LTE — aucun conflit
+    // Désactivé en veille : WiFi.mode() cause Arduino Event Malloc Failed
 #if LTE_ENABLED
-    if (_wsUseLte) {
+    if (_wsUseLte && sleepGetPowerState() == POWER_ACTIVE) {
         static uint32_t lastWifiScan = 0;
         if (millis() - lastWifiScan > 300000) {  // 5 min = ~8600 req/mois (gratuit Google)
             lastWifiScan = millis();

@@ -1891,6 +1891,10 @@ esp32Wss.on('connection', (ws) => {
             }
           }
 
+        } else if (msg.type === 'ping') {
+          // Keepalive ESP32 → proxy : répondre immédiatement pour confirmer la connexion
+          try { ws.send(JSON.stringify({ type: 'pong' })); } catch (_) {}
+
         } else if (msg.type === 'telemetry') {
           const entry = scooters.get(scooterId);
           if (entry) {

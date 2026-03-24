@@ -255,6 +255,9 @@ static void sleepResetActivity() {
         Serial.printf("[sleep] activité détectée — retour ACTIF (était %s)\n",
                       sleepGetPowerStateName());
 
+        // Réinitialiser le flag IA (VEILLE_PROFONDE l'avait mis à true)
+        _sleepAIDisconnected = false;
+
         // Réactiver I2S si désactivé par la veille
         if (_sleepI2SDisabled) {
             _sleepI2SDisabled = false;
