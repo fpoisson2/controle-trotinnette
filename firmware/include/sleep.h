@@ -259,7 +259,13 @@ static void sleepResetActivity() {
         if (_sleepI2SDisabled) {
             _sleepI2SDisabled = false;
             audioStartI2S();  // Reprendre le driver existant (pas réinstaller)
-            Serial.println("[sleep] I2S réactivé (start)");
+            // Drainer les buffers DMA stale (3 lectures à vide)
+            uint8_t dummy[1024];
+            size_t br;
+            for (int i = 0; i < 3; i++) {
+                i2s_read(I2S_NUM_0, dummy, sizeof(dummy), &br, pdMS_TO_TICKS(20));
+            }
+            Serial.println("[sleep] I2S réactivé + DMA drainé");
         }
 
         // Désactiver WiFi power save (seulement si WiFi actif)

@@ -661,12 +661,10 @@ function connectOpenAI() {
         voice: 'alloy',
         input_audio_format: 'pcm16',
         output_audio_format: 'pcm16',
-        input_audio_transcription: null,
+        input_audio_transcription: { model: 'gpt-4o-transcribe', language: 'fr' },
         turn_detection: {
-          type: 'server_vad',
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500,
+          type: 'semantic_vad',
+          eagerness: 'medium',
           create_response: true,
           interrupt_response: false
         },
@@ -683,6 +681,7 @@ function connectOpenAI() {
     switch (event.type) {
       // Transcription de l'audio entrant (journal navigateur uniquement)
       case 'conversation.item.input_audio_transcription.completed': {
+        console.log(`[stt] "${event.transcript}"`);
         const payload = `data: ${JSON.stringify({ type: 'transcript', text: event.transcript })}\n\n`;
         for (const c of sseClients) { try { c.write(payload); } catch (_) {} }
         break;
@@ -1976,10 +1975,9 @@ esp32Wss.on('connection', (ws) => {
             const dur = Date.now() - entry.voiceStartTime;
             console.log(`[stream] fin PTT (${dur}ms, ${msg.samples || 0} samples) → commit Realtime`);
 
-            // Commit le buffer audio pour déclencher la réponse
+            // Commit le buffer audio (semantic_vad déclenche la réponse)
             if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
               openaiWs.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
-              openaiWs.send(JSON.stringify({ type: 'response.create' }));
             }
           }
 
