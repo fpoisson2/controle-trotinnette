@@ -1720,10 +1720,19 @@ esp32Wss.on('connection', (ws) => {
   console.log('[esp32-ws] nouvelle connexion (attente hello)');
   let scooterId = null;
 
-  // Ping WebSocket toutes les 20s pour garder la connexion vivante via Cloudflare
+  // Ping WebSocket toutes les 20s + détection pong timeout (connexion morte)
+  let pongReceived = true;
   const espPing = setInterval(() => {
-    if (ws.readyState === WebSocket.OPEN) ws.ping();
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (!pongReceived) {
+      console.log(`[esp32-ws] pong timeout — fermeture connexion stale scooter=${scooterId}`);
+      ws.terminate();
+      return;
+    }
+    pongReceived = false;
+    ws.ping();
   }, 20000);
+  ws.on('pong', () => { pongReceived = true; });
   ws.on('close', (code, reason) => {
     clearInterval(espPing);
     console.log(`[esp32-ws] close code=${code} reason=${reason?.toString() || ''} scooter=${scooterId}`);
