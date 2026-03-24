@@ -897,25 +897,8 @@ static void checkConnectivityWatchdog() {
 void setup() {
     delay(500);
 
-    // ── Allocation buffer audio LTE tôt (heap non fragmentée) ──────────────
-#if LTE_ENABLED
-    lteAudioCap = 16000 * 2 * 5;  // 5s de PCM16 16kHz = 160KB
-    lteAudioBuf = (uint8_t*)ps_malloc(lteAudioCap);
-    if (!lteAudioBuf) {
-        lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
-    }
-    if (!lteAudioBuf) {
-        lteAudioCap = 16000 * 2 * 3;  // Fallback 3s = 96KB
-        lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
-    }
-    if (lteAudioBuf) {
-        Serial.printf("[lte] buffer audio %u KB alloué (heap=%u)\n",
-            (unsigned)(lteAudioCap / 1024), (unsigned)esp_get_free_heap_size());
-    } else {
-        Serial.printf("[lte] ERREUR buffer audio (heap=%u)\n",
-            (unsigned)esp_get_free_heap_size());
-    }
-#endif
+    // Buffer audio LTE : alloué plus tard, seulement si on est en mode LTE
+    // (160KB + tâche 20KB dépasse la heap disponible en WiFi)
 
     // ── Détection réveil deep sleep et jingle de boot ──────────────────────
     bool wokeFromSleep = sleepIsWakeFromDeepSleep();
@@ -998,6 +981,17 @@ void setup() {
                 WiFi.mode(WIFI_OFF);
                 connSetType(CONN_LTE);
                 _wsUseLte = true;
+                // Allouer le buffer audio LTE maintenant
+                lteAudioCap = 16000 * 2 * 5;
+                lteAudioBuf = (uint8_t*)ps_malloc(lteAudioCap);
+                if (!lteAudioBuf) lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
+                if (!lteAudioBuf) {
+                    lteAudioCap = 16000 * 2 * 3;
+                    lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
+                }
+                Serial.printf("[lte] buffer audio %u KB (heap=%u)\n",
+                    lteAudioBuf ? (unsigned)(lteAudioCap/1024) : 0,
+                    (unsigned)esp_get_free_heap_size());
             } else {
                 Serial.println("[lte] connexion LTE échouée — reboot");
                 ESP.restart();
