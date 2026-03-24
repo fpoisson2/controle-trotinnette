@@ -337,6 +337,23 @@ function decodeAdpcm(adpcmBuf, nSamples) {
   return pcm;
 }
 
+// Resample PCM16 16kHz → 24kHz (ratio 3:2, interpolation linéaire)
+function resample16to24(pcm16_16k) {
+  const nIn = pcm16_16k.length / 2;
+  const nOut = Math.floor(nIn * 24000 / 16000);
+  const out = Buffer.alloc(nOut * 2);
+  for (let i = 0; i < nOut; i++) {
+    const srcPos = i * 16000 / 24000;
+    const idx = Math.floor(srcPos);
+    const frac = srcPos - idx;
+    const s0 = pcm16_16k.readInt16LE(Math.min(idx * 2, pcm16_16k.length - 2));
+    const s1 = pcm16_16k.readInt16LE(Math.min((idx + 1) * 2, pcm16_16k.length - 2));
+    const sample = Math.round(s0 + frac * (s1 - s0));
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, sample)), i * 2);
+  }
+  return out;
+}
+
 // Décoder plusieurs blocs ADPCM concaténés (chaque bloc a son header de 4 bytes)
 function decodeAdpcmMultiBlock(adpcmBuf, totalSamples) {
   const pcm = Buffer.alloc(totalSamples * 2);
@@ -1754,11 +1771,12 @@ esp32Wss.on('connection', (ws) => {
           const chunk = Buffer.from(data);
           const nSamples = (chunk.length - 4) * 2;  // 2 samples par byte (nibbles)
           if (nSamples > 0) {
-            const pcm16 = decodeAdpcm(chunk, nSamples);
-            // Forward au Realtime API en base64
+            const pcm16_16k = decodeAdpcm(chunk, nSamples);
+            // Resample 16kHz → 24kHz (Realtime API attend 24kHz)
+            const pcm16_24k = resample16to24(pcm16_16k);
             openaiWs.send(JSON.stringify({
               type: 'input_audio_buffer.append',
-              audio: pcm16.toString('base64')
+              audio: pcm16_24k.toString('base64')
             }));
           }
         }
