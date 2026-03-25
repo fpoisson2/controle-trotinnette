@@ -1083,8 +1083,18 @@ void setup() {
         }
         throttleAdcMin = samples[100]; // médiane
     }
-    // brakeAdcMin : valeur fixe config.h (GPIO39 stable, pas de circuit parasite)
-    wsLog("[cal] thr_min=%d brk_min=%d (fixe)\n", throttleAdcMin, brakeAdcMin);
+    // Calibration frein au repos (même méthode que throttle)
+    {
+        int samples[200];
+        for (int i = 0; i < 200; i++) { samples[i] = analogRead(BRAKE_ADC_PIN); delay(10); }
+        for (int i = 1; i < 200; i++) {
+            int k = samples[i], j = i - 1;
+            while (j >= 0 && samples[j] > k) { samples[j+1] = samples[j]; j--; }
+            samples[j+1] = k;
+        }
+        brakeAdcMin = samples[100];
+    }
+    Serial.printf("[cal] thr_min=%d brk_min=%d\n", throttleAdcMin, brakeAdcMin);
 
     wsLog("[setup] prêt — appuyer sur le bouton pour activer le micro");
 }
@@ -1375,12 +1385,15 @@ void loop() {
             ftesc_control(Serial2, escThrottle, currentGear, escBrake);
         }
         if (ftesc_poll(Serial2, escData)) {
-            // RPM → km/h : roue 8.5" (≈0.216m diam) avec réduction ESC_POLE_PAIRS
-            float kmh = fabsf(escData.rpm) / ESC_POLE_PAIRS
-                        * 60.0f * 0.216f * 3.14159f / 1000.0f;
-            wsLog("[esc] thr=%u %.1fkm/h V=%.1fV A=%.2fA RPM=%.0f T=%.1f°C",
-                currentThrottle, kmh, escData.voltage, escData.motorCurrent,
-                escData.rpm, escData.tempFet);
+            static uint32_t _lastEscLog = 0;
+            if (millis() - _lastEscLog > 2000) {
+                _lastEscLog = millis();
+                Serial.printf("[esc] thr=%u locked=%d aiAct=%d RPM=%.0f V=%.1f A=%.2f thrRaw=%d thrMin=%d brkRaw=%d brkMin=%d\n",
+                    currentThrottle, (int)scooterLocked, (int)(millis() - lastAiCmd < AI_CMD_PRIORITY_MS),
+                    escData.rpm, escData.voltage, escData.motorCurrent,
+                    analogRead(THROTTLE_ADC_PIN), throttleAdcMin,
+                    analogRead(BRAKE_ADC_PIN), brakeAdcMin);
+            }
         }
         }  // end if (escReady)
 #endif
