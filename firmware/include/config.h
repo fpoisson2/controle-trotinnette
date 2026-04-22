@@ -49,7 +49,7 @@
 
 #define MIC_CHUNK_SAMPLES   512     // Samples par chunk I2S (~32 ms à 16 kHz)
 #define MIC_GAIN            12      // Gain numérique appliqué au PCM brut
-#define VOLUME_GAIN         4.5f    // Gain de volume pour la sortie DAC (voix IA)
+#define VOLUME_GAIN         3.2f    // Gain de volume pour la sortie DAC (voix IA)
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Audio — Haut-parleur DAC
@@ -176,7 +176,7 @@
 #define SLEEP_TIMEOUT_MS        1800000   // 30 min → deep sleep ESP32
 
 // Heartbeat en deep sleep (réveil timer périodique)
-#define SLEEP_HEARTBEAT_SEC     300       // 5 minutes entre chaque réveil
+#define SLEEP_HEARTBEAT_SEC     0         // pas de réveil périodique (wake uniquement sur GPIO)
 
 // Seuil ADC pour réveil par manette
 #define THROTTLE_WAKE_THRESHOLD 50

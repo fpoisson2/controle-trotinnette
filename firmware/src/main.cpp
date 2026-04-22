@@ -1100,9 +1100,10 @@ void setup() {
     wsProxy.beginSSL(PROXY_HOST, PROXY_PORT, "/ws-esp32");
     wsProxy.onEvent(onWsProxyEvent);
     wsProxy.setReconnectInterval(5000);
-    if (!_wsUseLte) {
-        wsProxy.enableHeartbeat(15000, 5000, 2);
-    }
+    // Heartbeat désactivé temporairement pour diagnostiquer les déconnexions rapides
+    // if (!_wsUseLte) {
+    //     wsProxy.enableHeartbeat(15000, 5000, 2);
+    // }
     wsLog("[ws-proxy] connexion vers wss://%s/ws-esp32\n", PROXY_HOST);
 
     xTaskCreatePinnedToCore(taskCapture, "taskCapture", 20480, NULL, 2, NULL, 1);
@@ -1384,8 +1385,10 @@ void loop() {
     if (millis() - lastControl >= 50) {
         lastControl = millis();
 #if !FAKE_TELEMETRY
-        // Attendre 3s après le boot pour laisser l'ESC finir son initialisation
+        // Attendre 3s après le boot pour laisser l'ESC finir son initialisation.
+        // Pendant ce délai, maintenir le watchdog ESC (sinon deep sleep au bout de 200 ms).
         const bool escReady = (millis() >= 3000);
+        if (!escReady) lastEscActivityMs = millis();
         if (escReady) {
         // Priorité IA pendant AI_CMD_PRIORITY_MS, ensuite manette physique
         // Si verrouillée : ignorer manette ET commandes IA
@@ -1458,12 +1461,46 @@ void loop() {
             }
             if (targetThrottle > gearMax) targetThrottle = gearMax;
 
-            // Limite de vitesse configurable (km/h) : couper l'accélération
-            // si la vitesse courante dépasse le plafond. On garde le freinage.
-            float curSpeedKmh = fabsf(escData.rpm) / (float)ESC_POLE_PAIRS * 60.0f / 1000.0f;
-            if (curSpeedKmh >= (float)speedLimitKmh &&
-                targetThrottle > FTESC_THROTTLE_NEUTRAL) {
-                targetThrottle = FTESC_THROTTLE_NEUTRAL;
+            // Limite de vitesse avec prédiction (anticipation).
+            // On prédit la vitesse à t+LOOKAHEAD en extrapolant la dérivée ;
+            // si la prédiction dépasse la limite, on coupe tôt. Ça compense
+            // l'inertie du moteur et évite le dépassement à vide.
+            if (targetThrottle > FTESC_THROTTLE_NEUTRAL) {
+                static float    cap           = 1.0f;
+                static float    prevSpeedKmh  = 0.0f;
+                static uint32_t lastCapMs     = 0;
+
+                uint32_t now = millis();
+                float    dt  = (lastCapMs == 0) ? 0.05f : (now - lastCapMs) / 1000.0f;
+                lastCapMs    = now;
+                if (dt > 0.2f || dt < 0.001f) dt = 0.05f;
+
+                // Vitesse brute (pas de filtre — on veut réagir vite)
+                float curSpeedKmh = fabsf(escData.rpm) / (float)ESC_POLE_PAIRS * 60.0f / 1000.0f;
+                float dSpeed      = (curSpeedKmh - prevSpeedKmh) / dt;  // km/h / s
+                prevSpeedKmh      = curSpeedKmh;
+
+                // Prédiction 0.5 s dans le futur (anticipe l'inertie moteur)
+                const float LOOKAHEAD_S = 0.5f;
+                float predSpeed = curSpeedKmh + dSpeed * LOOKAHEAD_S;
+
+                float limit = (float)speedLimitKmh;
+                const float BAND = 3.0f;
+                float target = (limit - predSpeed) / BAND;
+                if (target < 0.0f) target = 0.0f;
+                if (target > 1.0f) target = 1.0f;
+
+                // Rate-limit du cap : descente instantanée, montée lente
+                const float RATE_UP = 0.4f;  // 2.5 s pour 0→1
+                float stepUp = RATE_UP * dt;
+                if (target < cap) cap = target;                // descente immédiate
+                else if (target > cap + stepUp) cap += stepUp; // montée lente
+                else cap = target;
+                if (cap < 0.0f) cap = 0.0f;
+                if (cap > 1.0f) cap = 1.0f;
+
+                uint16_t delta = targetThrottle - FTESC_THROTTLE_NEUTRAL;
+                targetThrottle = FTESC_THROTTLE_NEUTRAL + (uint16_t)(delta * cap);
             }
 
             // Rate limiting :
