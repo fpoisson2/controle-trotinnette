@@ -49,7 +49,7 @@
 
 #define MIC_CHUNK_SAMPLES   512     // Samples par chunk I2S (~32 ms à 16 kHz)
 #define MIC_GAIN            12      // Gain numérique appliqué au PCM brut
-#define VOLUME_GAIN         2.5f    // Gain de volume pour la sortie DAC
+#define VOLUME_GAIN         4.5f    // Gain de volume pour la sortie DAC (voix IA)
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Audio — Haut-parleur DAC

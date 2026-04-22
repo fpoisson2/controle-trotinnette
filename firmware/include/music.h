@@ -71,6 +71,13 @@ static const char PROGMEM _rtttl_jingle[] =
     "Jingle:d=4,o=5,b=240:"
     "8e,8e,e,8e,8e,e,8e,8g,8c,8d,2e,8f,8f,8f,8f,8f,8e,8e,16e,16e,8e,8d,8d,8e,d,g";
 
+// Thème d'invincibilité (étoile) — joué quand vitesse > seuil et Mario sélectionné
+static const char PROGMEM _rtttl_mario_star[] =
+    "MarioStar:d=16,o=6,b=250:"
+    "g#,e,g,a,c,a,g,e,g#,e,g,a,c,a,g,e,"
+    "g#,e,g,a,c,a,g,e,g#,e,g,a,c,a,g,e,"
+    "f#,d#,f#,g#,b,g#,f#,d#,f#,d#,f#,g#,b,g#,f#,d#";
+
 // ── Tableau des pistes ──────────────────────────────────────────────────────
 struct MusicTrack {
     const char* rtttl;   // Chaîne RTTTL en PROGMEM
@@ -84,7 +91,11 @@ static const MusicTrack _tracks[] = {
     { _rtttl_furelise, "Fur Elise"    },
     { _rtttl_nokia,    "Nokia Tune"   },
     { _rtttl_jingle,   "Jingle Bells" },
+    { _rtttl_mario_star, "Mario Star"  },
 };
+// Index fixes — utilisés par main.cpp pour le bascule vitesse
+#define MUSIC_TRACK_MARIO       0
+#define MUSIC_TRACK_MARIO_STAR  6
 static const uint8_t _trackCount = sizeof(_tracks) / sizeof(_tracks[0]);
 
 // ── État du lecteur ─────────────────────────────────────────────────────────
@@ -97,6 +108,7 @@ static uint8_t   _currentTrack = 0;
 static uint32_t  _noteStartMs  = 0;
 static uint32_t  _trackStartMs = 0;
 static uint32_t  _totalDurMs   = 0;   // Durée totale de la piste (calculée au parse)
+static float     _tempoScale   = 1.0f; // multiplicateur durée note (1.0=nominal, <1.0=plus rapide)
 
 // ── Fréquences des notes (octave 0) ─────────────────────────────────────────
 // Index : 0=C, 1=C#, 2=D, 3=D#, 4=E, 5=F, 6=F#, 7=G, 8=G#, 9=A, 10=A#, 11=B
@@ -305,6 +317,13 @@ static void musicPrev() {
     }
 }
 
+// Ajuste la vitesse de lecture sans changer le pitch (durée des notes scaled)
+static void musicSetTempo(float scale) {
+    if (scale < 0.25f) scale = 0.25f;
+    if (scale > 4.0f)  scale = 4.0f;
+    _tempoScale = scale;
+}
+
 static void musicToggle() {
     if (!_musicPlaying) {
         musicPlay(_currentTrack);
@@ -361,8 +380,10 @@ static void musicTick(bool pttActive) {
 
     const MusicNote& note = _notes[_noteIndex];
     uint32_t elapsed = millis() - _noteStartMs;
+    uint32_t scaledDur = (uint32_t)(note.duration * _tempoScale);
+    if (scaledDur < 10) scaledDur = 10;
 
-    if (elapsed >= note.duration) {
+    if (elapsed >= scaledDur) {
         _noteIndex++;
         _noteStartMs = millis();
         _musicPhase  = 0.0f;
@@ -465,6 +486,7 @@ static void        musicNext()                {}
 static void        musicPrev()                {}
 static void        musicToggle()              {}
 static void        musicTick(bool)            {}
+static void        musicSetTempo(float)        {}
 static bool        musicIsPlaying()           { return false; }
 static bool        musicIsPaused()            { return false; }
 static bool        musicIsActive()            { return false; }

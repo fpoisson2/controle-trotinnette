@@ -1206,7 +1206,45 @@ void loop() {
 
     // ── Lecteur de musique : tick non-bloquant ───────────────────────────────
 #if MUSIC_ENABLED
-    musicTick(voiceActive);
+    {
+        // Vitesse actuelle (km/h)
+        float curSpeed = fabsf(escData.rpm) / (float)ESC_POLE_PAIRS * 60.0f / 1000.0f;
+
+        static bool wasVoiceActive = false;
+
+        if (voiceActive) {
+            // Mode vocal : couper complètement la musique
+            if (musicIsActive()) musicStop();
+        } else if (curSpeed < 0.5f) {
+            // À l'arrêt : couper la musique
+            if (musicIsActive()) musicStop();
+        } else {
+            // Roulage : démarrer/reprendre la musique
+            if (!musicIsActive()) {
+                musicPlay(MUSIC_TRACK_MARIO);
+            }
+
+            // Bascule Mario ↔ Étoile selon vitesse (hystérésis 13/15 km/h)
+            if (musicIsActive()) {
+                uint8_t tr = musicGetTrackIndex();
+                if (tr == MUSIC_TRACK_MARIO && curSpeed > 15.0f) {
+                    musicPlay(MUSIC_TRACK_MARIO_STAR);
+                } else if (tr == MUSIC_TRACK_MARIO_STAR && curSpeed < 13.0f) {
+                    musicPlay(MUSIC_TRACK_MARIO);
+                }
+            }
+
+            // Tempo linéaire : 0 km/h → 0.6x, 25 km/h → 1.6x
+            float v = curSpeed;
+            if (v < 0.0f) v = 0.0f;
+            if (v > 25.0f) v = 25.0f;
+            float speedFactor = 0.6f + (1.0f / 25.0f) * v;
+            musicSetTempo(1.0f / speedFactor);
+        }
+        wasVoiceActive = voiceActive;
+
+        musicTick(voiceActive);
+    }
 #endif
 
     // ── Scan WiFi périodique pour géolocalisation (toutes les 5 min) ────────

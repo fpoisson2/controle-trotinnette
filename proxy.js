@@ -138,7 +138,7 @@ function getScooterList() {
       telemetry: s.telemetry,
       selected: id === selectedScooterId,
       connectedAt: s.connectedAt,
-      locked: s.locked !== false,  // verrouillée par défaut
+      locked: s.locked === true,  // déverrouillée par défaut
       activeRide: activeRide ? { id: activeRide.id, startedAt: activeRide.startedAt } : null
     };
   });
@@ -214,23 +214,20 @@ const TOOL_SCHEMA = {
     properties: {
       action: {
         type: 'string',
-        enum: ['avancer', 'freiner', 'arreter', 'vitesse_lente', 'vitesse_moyenne', 'vitesse_haute'],
+        enum: ['freiner', 'arreter'],
         description:
-          'avancer = accélérer (utilise intensity), ' +
           'freiner = ralentir/freiner (utilise intensity), ' +
-          'arreter = arrêt complet immédiat, ' +
-          'vitesse_lente = passer en vitesse lente (limite ~33 %), ' +
-          'vitesse_moyenne = passer en vitesse moyenne (limite ~66 %), ' +
-          'vitesse_haute = passer en vitesse haute (plein régime)'
+          'arreter = arrêt complet immédiat. ' +
+          'Le mode vocal ne permet PAS d\'accélérer ni de changer de vitesse — ' +
+          'uniquement freiner ou arrêter pour la sécurité.'
       },
       intensity: {
         type: 'number',
         minimum: 0,
         maximum: 1,
         description:
-          'Intensité 0.0–1.0 — pour avancer et freiner. ' +
-          'Exemples : avancer 0.3 = lent, 0.7 = rapide, 1.0 = plein gaz ; ' +
-          'freiner 0.5 = freinage normal, 1.0 = freinage d\'urgence.'
+          'Intensité 0.0–1.0 pour freiner. ' +
+          '0.5 = freinage normal, 1.0 = freinage d\'urgence.'
       }
     },
     required: ['action']
@@ -250,10 +247,22 @@ const TELEMETRY_TOOL_SCHEMA = {
   }
 };
 
+// Liste des actions autorisées depuis le mode vocal (sécurité)
+const VOICE_ALLOWED_ACTIONS = ['freiner', 'arreter'];
+
+function sendVoiceCmd(action, intensity) {
+  if (!VOICE_ALLOWED_ACTIONS.includes(action)) {
+    console.log(`[voice] commande ${action} refusée — vocal limité à freiner/arreter`);
+    broadcastSSE({ type: 'voice_blocked', action, message: 'Le mode vocal ne permet que freiner/arrêter' });
+    return;
+  }
+  sendScooterCmd(action, intensity);
+}
+
 function sendScooterCmd(action, intensity) {
   // Bloquer les commandes moteur si la trottinette est verrouillée
   const selected = getSelectedScooter();
-  if (selected && selected.locked !== false) {
+  if (selected && selected.locked === true) {
     const motorActions = ['avancer', 'freiner', 'vitesse_lente', 'vitesse_moyenne', 'vitesse_haute'];
     if (motorActions.includes(action)) {
       console.log(`[lock] commande ${action} bloquée — trottinette verrouillée`);
@@ -275,7 +284,9 @@ const CHAINED_SYSTEM_PROMPT =
   'Tu es l\'assistante vocale d\'une trottinette électrique. ' +
   'RÈGLE ABSOLUE : réponds en maximum 10 mots. Jamais plus. Sois ultra-concise.\n' +
   'Pour batterie/vitesse/tension/température → appelle lire_telemetrie\n' +
-  'Pour mouvement (avance, freine, stop, vitesse) → appelle commande_trottinette\n' +
+  'Pour freiner ou arrêter → appelle commande_trottinette. ' +
+  'IMPORTANT : tu ne peux PAS faire avancer ni changer la vitesse — ' +
+  'seules freiner et arreter sont permises en mode vocal (sécurité).\n' +
   'Confirme en quelques mots après l\'outil.';
 
 // Resampler PCM16 24kHz → PCM8 unsigned 8kHz (partagé entre Realtime et Chained)
@@ -520,8 +531,11 @@ async function processChainedAudio(scooterId, pcm16Buffer) {
         let toolResult = {};
         if (tc.function.name === 'commande_trottinette') {
           const args = JSON.parse(tc.function.arguments);
-          sendScooterCmd(args.action, args.intensity);
-          toolResult = { success: true, action: args.action, intensity: args.intensity ?? null };
+          sendVoiceCmd(args.action, args.intensity);
+          const allowed = VOICE_ALLOWED_ACTIONS.includes(args.action);
+          toolResult = allowed
+            ? { success: true, action: args.action, intensity: args.intensity ?? null }
+            : { success: false, error: 'Mode vocal: seules les actions freiner et arreter sont autorisées' };
           console.log(`[chained] commande: ${args.action} intensity=${args.intensity ?? 'n/a'}`);
         } else if (tc.function.name === 'lire_telemetrie') {
           toolResult = getSelectedTelemetry();
@@ -673,7 +687,7 @@ function connectOpenAI() {
         instructions:
           'Contrôle vocal d\'une trottinette. Réponds en français, MAX 1 phrase courte.\n' +
           'Question (batterie, vitesse, tension, temp) → lire_telemetrie\n' +
-          'Mouvement (avance, freine, stop) → commande_trottinette\n' +
+          'Freiner ou arrêter → commande_trottinette (AVANCER/VITESSE interdits en vocal)\n' +
           'Appelle l\'outil PUIS confirme brièvement.',
         voice: 'alloy',
         input_audio_format: 'pcm16',
@@ -738,7 +752,7 @@ function connectOpenAI() {
         if (event.name === 'commande_trottinette') {
           try {
             const args = JSON.parse(event.arguments);
-            sendScooterCmd(args.action, args.intensity);
+            sendVoiceCmd(args.action, args.intensity);
             console.log(`[openai] commande: ${args.action} intensity=${args.intensity ?? 'n/a'}`);
 
             openaiWs.send(JSON.stringify({
@@ -900,7 +914,7 @@ async function processLocalAudio(audioBuffer) {
   if (toolCall) {
     try {
       const args = typeof toolCall === 'string' ? JSON.parse(toolCall) : toolCall;
-      sendScooterCmd(args.action, args.intensity);
+      sendVoiceCmd(args.action, args.intensity);
     } catch (err) {
       console.error('[ollama] erreur parsing tool :', err.message);
     }
@@ -1096,7 +1110,7 @@ app.get('/status', (req, res) => {
     selected_scooter: selectedScooterId,
     fw_version: selected?.fwVersion ?? null,
     debug: selected?.debugMode ?? false,
-    locked: selected?.locked !== false,
+    locked: selected?.locked === true,
     active_ride: selected ? getActiveRide(selectedScooterId) : null
   });
 });
@@ -1223,17 +1237,10 @@ app.post('/api/rides/end', (req, res) => {
     return res.status(404).json({ error: 'Aucune course active' });
   }
 
-  // Terminer la course
+  // Terminer la course (pas de reverrouillage auto — la trottinette reste dispo)
   const ride = endRideInternal(activeRide.id, targetId, scooter);
 
-  // Reverrouiller la trottinette
-  scooter.locked = true;
-  if (scooter.ws.readyState === WebSocket.OPEN) {
-    scooter.ws.send(JSON.stringify({ type: 'lock', locked: true }));
-  }
-
   broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
-  broadcastSSE({ type: 'lock_changed', scooterId: targetId, locked: true });
   res.json({ ok: true, ride });
 });
 
@@ -1846,11 +1853,11 @@ esp32Wss.on('connection', (ws) => {
             voiceStreaming: false,  // true pendant le streaming PTT temps réel
             connectedAt: Date.now(),
             name: null,
-            locked: true  // verrouillée par défaut au démarrage
+            locked: false  // déverrouillée par défaut (libre service)
           });
           // Auto-sélection si c'est la première trottinette
           if (!selectedScooterId) selectedScooterId = scooterId;
-          console.log(`[esp32-ws] enregistré: ${scooterId} (FW ${msg.version}) — verrouillée`);
+          console.log(`[esp32-ws] enregistré: ${scooterId} (FW ${msg.version}) — déverrouillée`);
 
           // Restaurer la dernière position connue depuis la BD
           try {
@@ -1877,8 +1884,8 @@ esp32Wss.on('connection', (ws) => {
             console.error(`[esp32-ws] erreur enregistrement fleet/DB : ${err.message}`);
           }
 
-          // Envoyer l'état verrouillé à l'ESP32
-          ws.send(JSON.stringify({ type: 'lock', locked: true }));
+          // Synchroniser l'état déverrouillé avec l'ESP32
+          ws.send(JSON.stringify({ type: 'lock', locked: false }));
           // Notifier le dashboard
           broadcastSSE({ type: 'scooter_list', scooters: getScooterList() });
 
