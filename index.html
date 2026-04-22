@@ -180,6 +180,12 @@
                oninput="document.getElementById('intensity-val').textContent=this.value+'%'">
         <span id="intensity-val">50%</span>
       </div>
+      <div class="slider-row" style="margin-top:8px">
+        <label>VITESSE MAX</label>
+        <input type="range" id="speed-limit-slider" min="5" max="32" step="1" value="25"
+               oninput="onSpeedLimitChange(this.value)">
+        <span id="speed-limit-val">25 km/h</span>
+      </div>
     </div>
 
     <!-- Music controls -->
@@ -349,6 +355,12 @@
         <input type="range" id="intensity-slider-m" min="0" max="100" value="50"
                oninput="syncSlider(this)">
         <span id="intensity-val-m">50%</span>
+      </div>
+      <div class="slider-row">
+        <label>VITESSE MAX</label>
+        <input type="range" id="speed-limit-slider-m" min="5" max="32" step="1" value="25"
+               oninput="onSpeedLimitChange(this.value, true)">
+        <span id="speed-limit-val-m">25 km/h</span>
       </div>
       <div class="controls-title" style="margin-top:8px">Musique</div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">

@@ -597,6 +597,30 @@ function sendCmd(action) {
   }).catch(console.error);
 }
 
+// ── Vitesse maximale (km/h) ──────────────────────────────────────────────────
+let _speedLimitTimer = null;
+function onSpeedLimitChange(kmh, fromMobile) {
+  const k = parseInt(kmh, 10);
+  // Synchroniser les deux sliders + libellés
+  const s1 = document.getElementById('speed-limit-slider');
+  const s2 = document.getElementById('speed-limit-slider-m');
+  const v1 = document.getElementById('speed-limit-val');
+  const v2 = document.getElementById('speed-limit-val-m');
+  if (s1 && !fromMobile) { /* no-op */ }
+  if (s1) s1.value = k;
+  if (s2) s2.value = k;
+  if (v1) v1.textContent = k + ' km/h';
+  if (v2) v2.textContent = k + ' km/h';
+  // Debounce : envoyer 250 ms après dernier changement
+  clearTimeout(_speedLimitTimer);
+  _speedLimitTimer = setTimeout(() => {
+    authFetch('/api/speed-limit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kmh: k })
+    }).catch(console.error);
+  }, 250);
+}
+
 // ── Musique ──────────────────────────────────────────────────────────────────
 function musicCmd(action) {
   const body = { action };

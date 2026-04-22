@@ -207,8 +207,8 @@ static void sleepEnterDeepSleep() {
     // Jouer le jingle de mise en veille
     sleepPlaySleepJingle();
 
-    // Désactiver WiFi pour économiser
-    WiFi.disconnect(true);
+    // Désactiver WiFi pour économiser (ne pas effacer les creds)
+    WiFi.disconnect(false);
     WiFi.mode(WIFI_OFF);
     delay(10);
 

@@ -97,7 +97,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Détection extinction ESC → retour en deep sleep
 // ─────────────────────────────────────────────────────────────────────────────
-#define ESC_POWERDOWN_TIMEOUT_MS  15000   // 15 s sans trame ESC → deep sleep
+#define ESC_POWERDOWN_TIMEOUT_MS  200     // 200 ms sans trame ESC → deep sleep
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  WebSocket serveur local (télémétrie directe sur le réseau WiFi)

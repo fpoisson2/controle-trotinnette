@@ -193,7 +193,7 @@ function broadcastSSE(obj) {
   }
   // Envoyer à la trottinette SEULEMENT les messages qu'elle traite
   // (audio est géré séparément via sendAudioToEsp avec resampling)
-  const espTypes = new Set(['cmd', 'lock', 'music', 'debug', 'ota_begin', 'ota_end']);
+  const espTypes = new Set(['cmd', 'lock', 'music', 'debug', 'speed_limit', 'ota_begin', 'ota_end']);
   if (espTypes.has(obj.type)) {
     const selected = getSelectedScooter();
     if (selected && selected.ws.readyState === WebSocket.OPEN) {
@@ -1071,6 +1071,16 @@ app.post('/cmd', (req, res) => {
   if (!action) return res.status(400).json({ error: 'action requise' });
   sendScooterCmd(action, intensity);
   res.json({ ok: true });
+});
+
+// ── POST /api/speed-limit — plafond de vitesse (km/h) ──
+app.post('/api/speed-limit', (req, res) => {
+  const kmh = parseInt(req.body?.kmh, 10);
+  if (!Number.isFinite(kmh) || kmh < 1 || kmh > 50) {
+    return res.status(400).json({ error: 'kmh invalide (1-50)' });
+  }
+  broadcastSSE({ type: 'speed_limit', kmh });
+  res.json({ ok: true, kmh });
 });
 
 // ── POST /api/music — contrôle musique sur la trottinette sélectionnée ──
