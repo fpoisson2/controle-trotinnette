@@ -12,6 +12,7 @@
 #include "audio.h"
 #include "config.h"
 #include "flipsky.h"
+#include "modem.h"   // nécessaire avant sleep.h (modemPowerOff utilisé dans deep sleep)
 #include "sleep.h"
 #include "music.h"
 #include "display.h"

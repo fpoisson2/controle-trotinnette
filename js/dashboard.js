@@ -269,6 +269,7 @@ function updatePill(id, idM, value, decimals) {
 function applyTelemetry(data) {
   if (data.speed   !== undefined) updateSpeedometer(data.speed);
   if (data.voltage !== undefined) updatePill('val-voltage', 'val-voltage-m', data.voltage, 1);
+  if (data.vbat_mod !== undefined) updatePill('val-vbat-mod', 'val-vbat-mod-m', data.vbat_mod, 2);
   if (data.current !== undefined) updatePill('val-current', 'val-current-m', data.current, 1);
   if (data.temp    !== undefined) updatePill('val-temp',    'val-temp-m',    data.temp,    0);
   if (data.rssi !== undefined) updateSignalBars(data.rssi);
