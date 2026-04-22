@@ -87,6 +87,19 @@
 // Les defines FTESC_THROTTLE_* et FTESC_GEAR_* sont dans flipsky.h
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Batterie LilyGo (module ESP32) — ADC via diviseur 2:1 sur GPIO 35
+// ─────────────────────────────────────────────────────────────────────────────
+#define LILYGO_BAT_ADC_PIN   35     // Entrée ADC (input-only, RTC)
+#define LILYGO_BAT_DIVIDER   2.0f   // Facteur diviseur résistif (R1=R2)
+#define LILYGO_BAT_VMIN      3.3f   // ~0 %
+#define LILYGO_BAT_VMAX      4.2f   // ~100 %
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Détection extinction ESC → retour en deep sleep
+// ─────────────────────────────────────────────────────────────────────────────
+#define ESC_POWERDOWN_TIMEOUT_MS  15000   // 15 s sans trame ESC → deep sleep
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  WebSocket serveur local (télémétrie directe sur le réseau WiFi)
 // ─────────────────────────────────────────────────────────────────────────────
 #define WS_SERVER_PORT      8080

@@ -21,6 +21,17 @@
 #include <Update.h>
 
 static FlipskyData escData;
+static uint32_t    lastEscRxMs = 0;     // ms du dernier frame ESC reçu
+static bool        escEverSeen = false; // true après la 1re trame (évite sleep au boot)
+
+// Lecture tension batterie LilyGo (module ESP32) — moyenne de 8 échantillons
+static float readLilyGoBattery() {
+    uint32_t sum = 0;
+    for (int i = 0; i < 8; i++) sum += analogRead(LILYGO_BAT_ADC_PIN);
+    float raw = (float)sum / 8.0f;
+    // ADC 12 bits (0-4095), ref 3.3V, diviseur 2:1
+    return (raw / 4095.0f) * 3.3f * LILYGO_BAT_DIVIDER;
+}
 
 // ── OTA via WebSocket proxy ──
 static volatile bool otaMode     = false;
@@ -74,7 +85,12 @@ volatile bool _wsUseLte = false;
 
 // ── Verrouillage à distance (libre-service) ──
 // Quand locked=true, le throttle est forcé au neutre (ESC ne répond pas)
-static volatile bool scooterLocked = false;  // déverrouillée au boot (debug)
+static volatile bool scooterLocked = false;  // déverrouillée au boot (libre-service)
+
+// Timestamp de la dernière connexion WS proxy — sert à ignorer les lock:true
+// automatiques envoyés par le proxy pendant le handshake (grace period).
+static volatile uint32_t wsProxyConnectedAt = 0;
+#define LOCK_CMD_GRACE_MS 10000  // ignorer lock:true pendant 10s après connexion
 
 // Musique lancée manuellement (dashboard/boutons) : ne doit pas être arrêtée
 // automatiquement à l'arrêt de la trottinette
@@ -227,6 +243,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
     switch (type) {
         case WStype_CONNECTED: {
             wsProxyConnected = true;
+            wsProxyConnectedAt = millis();
             lastWifiActivity = millis();
             Serial.println("[ws-proxy] connecté à " PROXY_HOST);
             pendingBeep = 3;  // proxy ok (joué dans loop)
@@ -389,6 +406,14 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 wsLog("[music] commande: %s", action);
             } else if (strcmp(evtype, "lock") == 0) {
                 bool newLocked = doc["locked"] | true;
+                // Grace period : ignorer tout lock:true envoyé automatiquement
+                // par le proxy dans les premières secondes de la connexion.
+                // (lock:false est toujours accepté, pour pouvoir déverrouiller.)
+                if (newLocked && wsProxyConnectedAt > 0 &&
+                    (millis() - wsProxyConnectedAt) < LOCK_CMD_GRACE_MS) {
+                    wsLog("[lock] IGNORÉ (handshake proxy <10s)");
+                    break;
+                }
                 scooterLocked = newLocked;
                 wsLog("[lock] trottinette %s", newLocked ? "verrouillée" : "déverrouillée");
                 if (newLocked) {
@@ -784,6 +809,14 @@ static void sendTelemetry() {
     doc["locked"] = scooterLocked;
     doc["rssi"] = connGetRSSI();
     doc["conn"] = connGetTypeName();
+
+    // Batterie LilyGo (module ESP32 lui-même)
+    float vbatMod = readLilyGoBattery();
+    doc["vbat_mod"] = vbatMod;
+    float pctMod = (vbatMod - LILYGO_BAT_VMIN) / (LILYGO_BAT_VMAX - LILYGO_BAT_VMIN) * 100.0f;
+    if (pctMod < 0.0f) pctMod = 0.0f;
+    if (pctMod > 100.0f) pctMod = 100.0f;
+    doc["batt_mod_pct"] = pctMod;
 
     char buf[320];
     serializeJson(doc, buf, sizeof(buf));
@@ -1212,6 +1245,18 @@ void loop() {
         }
     }
 
+    // ── Détection ESC éteinte : retour deep sleep après 15 s sans trame ────
+    if (escEverSeen && lastEscRxMs > 0 &&
+        (millis() - lastEscRxMs) > ESC_POWERDOWN_TIMEOUT_MS) {
+        Serial.printf("[esc] aucune trame depuis %lu ms → DEEP SLEEP\n",
+                      (unsigned long)(millis() - lastEscRxMs));
+        // Stopper la musique si active (le jingle sleep la remplace)
+#if MUSIC_ENABLED
+        musicStop();
+#endif
+        sleepEnterDeepSleep();  // joue le jingle puis deep sleep (ne revient jamais)
+    }
+
     // ── Lecteur de musique : tick non-bloquant ───────────────────────────────
 #if MUSIC_ENABLED
     {
@@ -1435,6 +1480,8 @@ void loop() {
             ftesc_control(Serial2, escThrottle, currentGear, escBrake);
         }
         if (ftesc_poll(Serial2, escData)) {
+            lastEscRxMs = millis();
+            escEverSeen = true;
             static uint32_t _lastEscLog = 0;
             if (millis() - _lastEscLog > 2000) {
                 _lastEscLog = millis();

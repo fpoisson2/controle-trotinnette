@@ -215,13 +215,16 @@ static void sleepEnterDeepSleep() {
     // Source de réveil ext0 : bouton PTT (GPIO 2, actif LOW)
     esp_sleep_enable_ext0_wakeup(GPIO_NUM_2, 0);  // 0 = réveil quand LOW
 
-    // Source de réveil ext1 : manette (GPIO 32) OU frein (GPIO 39)
-    uint64_t wakeupMask = (1ULL << 32) | (1ULL << 39);
+    // Source de réveil ext1 : manette (GPIO 32) OU frein (GPIO 39) OU ESC RX (GPIO 14)
+    // GPIO 14 = ESC UART TX côté ESP32 ; repose à HIGH quand l'ESC est alimenté.
+    uint64_t wakeupMask = (1ULL << 32) | (1ULL << 39) | (1ULL << 14);
     esp_sleep_enable_ext1_wakeup(wakeupMask, ESP_EXT1_WAKEUP_ANY_HIGH);
 
-    // Pull-down sur GPIO 32 en mode RTC (maintenu pendant le deep sleep)
+    // Pull-down sur GPIO 32 et GPIO 14 en mode RTC (maintenu pendant le deep sleep)
     rtc_gpio_pulldown_en(GPIO_NUM_32);
     rtc_gpio_pullup_dis(GPIO_NUM_32);
+    rtc_gpio_pulldown_en(GPIO_NUM_14);
+    rtc_gpio_pullup_dis(GPIO_NUM_14);
 
     // Source de réveil timer : heartbeat périodique
     if (SLEEP_HEARTBEAT_SEC > 0) {
@@ -230,7 +233,7 @@ static void sleepEnterDeepSleep() {
         Serial.printf("[sleep] timer wakeup : %d secondes\n", SLEEP_HEARTBEAT_SEC);
     }
 
-    Serial.println("[sleep] entrée en deep sleep — réveil par PTT, manette, frein ou timer");
+    Serial.println("[sleep] entrée en deep sleep — réveil par PTT, manette, frein, ESC (GPIO14) ou timer");
     Serial.flush();
     delay(50);
 
