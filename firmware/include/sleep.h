@@ -207,10 +207,9 @@ static void sleepEnterDeepSleep() {
     // Jouer le jingle de mise en veille
     sleepPlaySleepJingle();
 
-    // Désactiver WiFi et Bluetooth pour économiser
+    // Désactiver WiFi pour économiser
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
-    btStop();
     delay(10);
 
     // Couper le modem SIM7670E — consomme ~20 mA idle si laissé allumé
@@ -225,12 +224,6 @@ static void sleepEnterDeepSleep() {
     // Fermer UART2 (ESC) et mettre TX en input pour éviter d'injecter du courant
     Serial2.end();
     pinMode(ESC_TX_PIN, INPUT);
-
-    // Détacher I2C si utilisé (OLED)
-    Wire.end();
-
-    // Geler l'état des GPIO pendant le deep sleep (évite dérives/fuites)
-    gpio_deep_sleep_hold_en();
 
     // Source de réveil ext0 : bouton PTT (GPIO 2, actif LOW)
     esp_sleep_enable_ext0_wakeup(GPIO_NUM_2, 0);  // 0 = réveil quand LOW
