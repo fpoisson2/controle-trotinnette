@@ -480,7 +480,7 @@ function fetchStatus() {
       if (s.selected_scooter) selectedScooterIdLocal = s.selected_scooter;
       const countEl = document.getElementById('scooter-count');
       if (countEl) countEl.textContent = s.scooter_count || 0;
-      updateLockUI(s.locked !== false);
+      updateLockUI(s.locked === true);
       if (s.active_ride) {
         activeRideId = s.active_ride.id;
         rideStartTime = s.active_ride.startedAt;
@@ -610,7 +610,7 @@ function musicCmd(action) {
 }
 
 // ── Verrouillage / Deverrouillage ───────────────────────────────────────────
-let scooterLocked = true;
+let scooterLocked = false;
 let activeRideId = null;
 let rideStartTime = null;
 let rideTimerInterval = null;

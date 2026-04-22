@@ -76,6 +76,10 @@ volatile bool _wsUseLte = false;
 // Quand locked=true, le throttle est forcé au neutre (ESC ne répond pas)
 static volatile bool scooterLocked = false;  // déverrouillée au boot (debug)
 
+// Musique lancée manuellement (dashboard/boutons) : ne doit pas être arrêtée
+// automatiquement à l'arrêt de la trottinette
+static volatile bool musicManualOverride = false;
+
 // WebSocket serveur (télémétrie vers proxy)
 static WebSocketsServer wsServer(WS_SERVER_PORT);
 static uint8_t          wsServerClientNum = 255;
@@ -368,14 +372,18 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                     int track = doc["track"] | -1;
                     if (track >= 0) musicPlay((uint8_t)track);
                     else musicToggle();
+                    musicManualOverride = musicIsActive();
                 } else if (strcmp(action, "pause") == 0) {
                     musicPause();
                 } else if (strcmp(action, "next") == 0) {
                     musicNext();
+                    musicManualOverride = true;
                 } else if (strcmp(action, "prev") == 0) {
                     musicPrev();
+                    musicManualOverride = true;
                 } else if (strcmp(action, "stop") == 0) {
                     musicStop();
+                    musicManualOverride = false;
                 }
                 sleepResetActivity();
                 wsLog("[music] commande: %s", action);
@@ -1214,14 +1222,18 @@ void loop() {
 
         if (voiceActive) {
             // Mode vocal : couper complètement la musique
-            if (musicIsActive()) musicStop();
+            if (musicIsActive()) {
+                musicStop();
+                musicManualOverride = false;
+            }
         } else if (curSpeed < 0.5f) {
-            // À l'arrêt : couper la musique
-            if (musicIsActive()) musicStop();
+            // À l'arrêt : couper la musique SAUF si lancée manuellement
+            if (musicIsActive() && !musicManualOverride) musicStop();
         } else {
-            // Roulage : démarrer/reprendre la musique
+            // Roulage : démarrer la musique auto (Mario) si rien ne joue
             if (!musicIsActive()) {
                 musicPlay(MUSIC_TRACK_MARIO);
+                musicManualOverride = false;  // démarrage auto
             }
 
             // Bascule Mario ↔ Étoile selon vitesse (hystérésis 13/15 km/h)
