@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - 'firmware/**'
       - 'proxy.js'
@@ -24,27 +25,37 @@ jobs:
       - name: Calculer la version automatique
         id: version
         run: |
-          # Format : vAAAA.MM.XX (XX s'incremente, repart a 01 chaque mois)
+          # main → release stable AAAA.MM.XX
+          # dev  → prerelease béta AAAA.MM.XX-beta.N (vers la prochaine stable)
           YEAR_MONTH=$(date -u +"%Y.%m")
           PREFIX="v${YEAR_MONTH}"
 
-          # Trouver le dernier tag du mois courant
-          LAST_TAG=$(git tag -l "${PREFIX}.*" --sort=-v:refname | head -n1)
-
-          if [ -z "$LAST_TAG" ]; then
-            NEXT_NUM="01"
+          # Dernier numéro de révision STABLE du mois (exclut les -beta)
+          LAST_STABLE=$(git tag -l "${PREFIX}.*" --sort=-v:refname | grep -v -- '-beta' | head -n1)
+          if [ -z "$LAST_STABLE" ]; then
+            LAST_STABLE_NUM=0
           else
-            # Extraire le numero XX et incrementer
-            CURRENT_NUM=$(echo "$LAST_TAG" | sed "s/${PREFIX}\.//")
-            NEXT_NUM=$(printf "%02d" $((10#$CURRENT_NUM + 1)))
+            LAST_STABLE_NUM=$(echo "$LAST_STABLE" | sed "s/${PREFIX}\.//")
           fi
+          NEXT_NUM=$(printf "%02d" $((10#$LAST_STABLE_NUM + 1)))
 
-          VERSION="${YEAR_MONTH}.${NEXT_NUM}"
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            VERSION="${YEAR_MONTH}.${NEXT_NUM}"
+            PRERELEASE="false"
+          else
+            # Béta vers la prochaine révision stable : AAAA.MM.NEXT-beta.N
+            TARGET="${YEAR_MONTH}.${NEXT_NUM}"
+            LAST_BETA_NUM=$(git tag -l "v${TARGET}-beta.*" | sed "s/.*-beta\.//" | sort -n | tail -n1)
+            BETA_NUM=$(( ${LAST_BETA_NUM:-0} + 1 ))
+            VERSION="${TARGET}-beta.${BETA_NUM}"
+            PRERELEASE="true"
+          fi
           TAG="v${VERSION}"
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION (tag: $TAG)"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION (tag: $TAG, prerelease: $PRERELEASE)"
 
       - name: Creer le tag
         run: |
@@ -56,9 +67,11 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
           body: |
-            Version `${{ steps.version.outputs.version }}`
+            Version `${{ steps.version.outputs.version }}`${{ steps.version.outputs.prerelease == 'true' && ' (béta — branche dev)' || ' (stable — branche main)' }}
 
             Le firmware est compile automatiquement par le serveur de production avec le `config.h` local.
             Le build demarre en arriere-plan des la detection de cette release.
             Mettre a jour depuis le dashboard web → Debug → Mise a jour firmware.
+            ${{ steps.version.outputs.prerelease == 'true' && 'Béta : visible dans le sélecteur de version, pas proposée en mise à jour automatique.' || '' }}
