@@ -8,8 +8,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Version firmware ─────────────────────────────────────────────────────────
-// Format : année.mois.révision (ex. 2026.06.1 = 1re révision de juin 2026)
-#define FW_VERSION  "2026.06.2"
+// Format : année.mois.révision (ex. 2026.06.01). La VRAIE version est injectée
+// automatiquement par le pipeline de release (CI tag → proxy.js patche ce
+// #define avant compilation). Cette valeur n'est qu'un placeholder pour les
+// builds locaux/dev : la garder < à la 1re révision du mois pour que toute
+// release officielle soit bien proposée comme mise à jour.
+#define FW_VERSION  "2026.06.0"
 
 // ── Flags de développement ───────────────────────────────────────────────────
 // FAKE_TELEMETRY : simule vitesse/tension/GPS (pas besoin d'ESC branché)
