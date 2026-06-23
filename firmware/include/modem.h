@@ -295,6 +295,10 @@ static void modemDisconnect() {
 //  modemPowerOff() — Éteindre le modem (économie d'énergie)
 // ─────────────────────────────────────────────────────────────────────────────
 static void modemPowerOff() {
+    if (!_modemInitialized) {
+        // Évite les AT commands bloquants si le modem n'a jamais été initialisé
+        return;
+    }
     Serial.println("[modem] extinction...");
     modemDisconnect();
 

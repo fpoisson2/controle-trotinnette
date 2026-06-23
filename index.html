@@ -85,6 +85,9 @@
   <button class="settings-item" id="mute-item" onclick="toggleMute()">
     <span class="si-dot"></span> Couper le son
   </button>
+  <button class="settings-item" id="mute-moving-item" onclick="toggleMuteMoving()">
+    <span class="si-dot"></span> Muter musique en roulant
+  </button>
   <button class="settings-item" id="debug-item" onclick="toggleDebug()">
     <span class="si-dot"></span> Debug ESP32
   </button>
@@ -129,7 +132,7 @@
 
     <!-- Telemetry pills -->
     <div class="telemetry-strip">
-      <div class="pill" style="--pill-color: var(--battery)">
+      <div class="pill" style="--pill-color: var(--battery)" title="Batterie trottinette">
         <span class="pill-value" id="val-voltage">0.0</span><span class="pill-unit">V</span>
       </div>
       <div class="pill" style="--pill-color: var(--current)">
@@ -153,7 +156,7 @@
     <!-- PTT -->
     <div class="ptt-wrap">
       <div class="ptt-container">
-        <button class="ptt-btn-new" id="ptt-btn-desktop" onclick="toggleRecording()" title="Activer/desactiver le micro">
+        <button class="ptt-btn-new" id="ptt-btn-desktop" title="Activer/desactiver le micro">
           <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
         <div class="ptt-ripple"></div>
@@ -167,15 +170,14 @@
     <div class="manual-controls">
       <div class="controls-title">Controle manuel</div>
       <div class="btn-row">
-        <button class="btn forward" onclick="sendCmd('avancer')">AVANCER</button>
         <button class="btn brake"   onclick="sendCmd('freiner')">FREINER</button>
         <button class="btn stop"    onclick="sendCmd('arreter')">ARRET</button>
       </div>
-      <div class="slider-row">
-        <label>INTENSITE</label>
-        <input type="range" id="intensity-slider" min="0" max="100" value="50"
-               oninput="document.getElementById('intensity-val').textContent=this.value+'%'">
-        <span id="intensity-val">50%</span>
+      <div class="slider-row" style="margin-top:8px">
+        <label>VITESSE MAX</label>
+        <input type="range" id="speed-limit-slider" min="5" max="32" step="1" value="25"
+               oninput="onSpeedLimitChange(this.value)">
+        <span id="speed-limit-val">25 km/h</span>
       </div>
     </div>
 
@@ -273,7 +275,7 @@
       </button>
     </div>
     <div class="telemetry-strip">
-      <div class="pill" style="--pill-color: var(--battery)">
+      <div class="pill" style="--pill-color: var(--battery)" title="Batterie trottinette">
         <span class="pill-value" id="val-voltage-m">0.0</span><span class="pill-unit">V</span>
       </div>
       <div class="pill" style="--pill-color: var(--current)">
@@ -334,15 +336,14 @@
   <div class="sheet-body">
     <div style="display:flex;flex-direction:column;gap:12px">
       <div class="btn-row">
-        <button class="btn forward" onclick="sendCmd('avancer')">AVANCER</button>
         <button class="btn brake"   onclick="sendCmd('freiner')">FREINER</button>
         <button class="btn stop"    onclick="sendCmd('arreter')">ARRET</button>
       </div>
       <div class="slider-row">
-        <label>INTENSITE</label>
-        <input type="range" id="intensity-slider-m" min="0" max="100" value="50"
-               oninput="syncSlider(this)">
-        <span id="intensity-val-m">50%</span>
+        <label>VITESSE MAX</label>
+        <input type="range" id="speed-limit-slider-m" min="5" max="32" step="1" value="25"
+               oninput="onSpeedLimitChange(this.value, true)">
+        <span id="speed-limit-val-m">25 km/h</span>
       </div>
       <div class="controls-title" style="margin-top:8px">Musique</div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">

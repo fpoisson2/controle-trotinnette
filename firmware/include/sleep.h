@@ -207,21 +207,30 @@ static void sleepEnterDeepSleep() {
     // Jouer le jingle de mise en veille
     sleepPlaySleepJingle();
 
-    // Désactiver WiFi et Bluetooth pour économiser
-    WiFi.disconnect(true);
+    // Désactiver WiFi pour économiser (ne pas effacer les creds)
+    WiFi.disconnect(false);
     WiFi.mode(WIFI_OFF);
     delay(10);
 
-    // Source de réveil ext0 : bouton PTT (GPIO 2, actif LOW)
-    esp_sleep_enable_ext0_wakeup(GPIO_NUM_2, 0);  // 0 = réveil quand LOW
+    // Couper le modem SIM7670E — consomme ~20 mA idle si laissé allumé
+    modemPowerOff();
 
-    // Source de réveil ext1 : manette (GPIO 32) OU frein (GPIO 39)
-    uint64_t wakeupMask = (1ULL << 32) | (1ULL << 39);
-    esp_sleep_enable_ext1_wakeup(wakeupMask, ESP_EXT1_WAKEUP_ANY_HIGH);
+    // Couper I2S (micro) si pas déjà fait
+    audioStopI2S();
 
-    // Pull-down sur GPIO 32 en mode RTC (maintenu pendant le deep sleep)
-    rtc_gpio_pulldown_en(GPIO_NUM_32);
-    rtc_gpio_pullup_dis(GPIO_NUM_32);
+    // Couper le DAC (haut-parleur) : remet GPIO 25 en état repos
+    dac_output_disable(DAC_CHANNEL_1);
+
+    // Fermer UART2 (ESC) et mettre TX en input pour éviter d'injecter du courant
+    Serial2.end();
+    pinMode(ESC_TX_PIN, INPUT);
+
+    // Source de réveil UNIQUE : ESC UART RX (GPIO 14) quand l'ESC est alimenté.
+    // Ligne au repos HIGH sur UART → wake on HIGH. Pull-down RTC pour bloquer
+    // toute dérive vers HIGH pendant que l'ESC est éteint.
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_14, 1);
+    rtc_gpio_pulldown_en(GPIO_NUM_14);
+    rtc_gpio_pullup_dis(GPIO_NUM_14);
 
     // Source de réveil timer : heartbeat périodique
     if (SLEEP_HEARTBEAT_SEC > 0) {
@@ -230,7 +239,7 @@ static void sleepEnterDeepSleep() {
         Serial.printf("[sleep] timer wakeup : %d secondes\n", SLEEP_HEARTBEAT_SEC);
     }
 
-    Serial.println("[sleep] entrée en deep sleep — réveil par PTT, manette, frein ou timer");
+    Serial.println("[sleep] entrée en deep sleep — réveil uniquement quand ESC alimenté (GPIO14)");
     Serial.flush();
     delay(50);
 

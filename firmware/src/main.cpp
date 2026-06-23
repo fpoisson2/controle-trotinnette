@@ -12,6 +12,7 @@
 #include "audio.h"
 #include "config.h"
 #include "flipsky.h"
+#include "modem.h"   // nécessaire avant sleep.h (modemPowerOff utilisé dans deep sleep)
 #include "sleep.h"
 #include "music.h"
 #include "display.h"
@@ -19,8 +20,23 @@
 // modem.h et lora.h sont inclus par connectivity.h et utilisés via leurs gardes
 #include "lora.h"
 #include <Update.h>
+#include <Preferences.h>
 
 static FlipskyData escData;
+// Dernière activité ESC (initialisée à millis() au boot dans setup()).
+// Si aucun frame Flipsky reçu pendant ESC_POWERDOWN_TIMEOUT_MS → deep sleep.
+// Le compteur démarre au boot pour couvrir le cas d'un réveil sur bouton PTT
+// alors que la drive est éteinte.
+static uint32_t    lastEscActivityMs = 0;
+
+// Lecture tension batterie LilyGo (module ESP32) — moyenne de 8 échantillons
+static float readLilyGoBattery() {
+    uint32_t sum = 0;
+    for (int i = 0; i < 8; i++) sum += analogRead(LILYGO_BAT_ADC_PIN);
+    float raw = (float)sum / 8.0f;
+    // ADC 12 bits (0-4095), ref 3.3V, diviseur 2:1
+    return (raw / 4095.0f) * 3.3f * LILYGO_BAT_DIVIDER;
+}
 
 // ── OTA via WebSocket proxy ──
 static volatile bool otaMode     = false;
@@ -69,12 +85,37 @@ static void wsLog(const char *fmt, ...) {
 // ─────────────────────────────────────────────────────────────────────────────
 static volatile bool voiceActive = false;
 
+// Monitor micro : si true, le micro est streamé en continu vers le proxy
+// (clients debug-audio du dashboard) SANS déclencher l'agent vocal OpenAI.
+// Activé/désactivé par le proxy selon les clients monitor connectés. WiFi seulement.
+static volatile bool monitorMode = false;
+
 // Flag global pour le bridge réseau WiFi/LTE (utilisé par WebSocketsNetworkClientSecure)
 volatile bool _wsUseLte = false;
 
 // ── Verrouillage à distance (libre-service) ──
 // Quand locked=true, le throttle est forcé au neutre (ESC ne répond pas)
-static volatile bool scooterLocked = false;  // déverrouillée au boot (debug)
+static volatile bool scooterLocked = false;  // déverrouillée au boot (libre-service)
+
+// Timestamp de la dernière connexion WS proxy — sert à ignorer les lock:true
+// automatiques envoyés par le proxy pendant le handshake (grace period).
+static volatile uint32_t wsProxyConnectedAt = 0;
+#define LOCK_CMD_GRACE_MS 10000  // ignorer lock:true pendant 10s après connexion
+
+// Musique lancée manuellement (dashboard/boutons) : ne doit pas être arrêtée
+// automatiquement à l'arrêt de la trottinette
+static volatile bool musicManualOverride = false;
+
+// Stockage persistant NVS (survit aux reboots)
+static Preferences prefs;
+
+// Mute musique en roulant : si true, pas de musique auto pendant le roulage.
+// Réglable depuis le dashboard, persistant entre les reboots (NVS).
+static volatile bool musicMuteWhileMoving = false;
+
+// Limite de vitesse configurable depuis le dashboard (km/h)
+// Si vitesse actuelle ≥ cette valeur, throttle est forcé au neutre.
+static volatile uint8_t speedLimitKmh = 25;
 
 // WebSocket serveur (télémétrie vers proxy)
 static WebSocketsServer wsServer(WS_SERVER_PORT);
@@ -155,6 +196,10 @@ static void wifiBegin() {
     WiFi.disconnect(true);
     delay(50);
     WiFi.mode(WIFI_STA);
+    // Fiabilité connexion (surtout après un soft-reset OTA) :
+    WiFi.persistent(false);       // ne pas réécrire la config en flash à chaque begin
+    WiFi.setSleep(false);         // pas de modem-sleep : alim directe batterie trottinette
+    WiFi.setAutoReconnect(true);  // reconnexion native en complément de la boucle manuelle
 #if WIFI_ENTERPRISE
     esp_wifi_sta_wpa2_ent_set_identity(
         (const uint8_t *)EAP_IDENTITY, strlen(EAP_IDENTITY));
@@ -180,11 +225,14 @@ static bool connectWiFi() {
 
     uint32_t t = millis();
     while (WiFi.status() != WL_CONNECTED) {
-        if (millis() - t > 10000) {
+        // 20s au boot : laisse le temps au WiFi après un soft-reset OTA avant
+        // de basculer en LTE (qui pulse le modem et peut le laisser instable)
+        if (millis() - t > 20000) {
             Serial.println("[wifi] timeout");
             WiFi.disconnect(true);
             return false;
         }
+        if (ftesc_poll(Serial2, escData)) lastEscActivityMs = millis();
         delay(500);
         Serial.print(".");
     }
@@ -223,6 +271,7 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
     switch (type) {
         case WStype_CONNECTED: {
             wsProxyConnected = true;
+            wsProxyConnectedAt = millis();
             lastWifiActivity = millis();
             Serial.println("[ws-proxy] connecté à " PROXY_HOST);
             pendingBeep = 3;  // proxy ok (joué dans loop)
@@ -252,7 +301,11 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
             if (deserializeJson(doc, payload, length)) break;
             const char *evtype = doc["type"] | "";
 
-            if (strcmp(evtype, "audio_begin") == 0) {
+            if (strcmp(evtype, "audio_stop") == 0) {
+                dacHead = dacTail = 0;
+                dacPreBuffering = false;
+                wsLog("[audio] arrêt lecture forcée");
+            } else if (strcmp(evtype, "audio_begin") == 0) {
                 // Proxy signale le début d'une réponse audio complète
                 dacHead = dacTail = 0;  // Reset ring buffer
                 dacPreBuffering = true;
@@ -368,19 +421,49 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                     int track = doc["track"] | -1;
                     if (track >= 0) musicPlay((uint8_t)track);
                     else musicToggle();
+                    musicManualOverride = musicIsActive();
                 } else if (strcmp(action, "pause") == 0) {
                     musicPause();
                 } else if (strcmp(action, "next") == 0) {
                     musicNext();
+                    musicManualOverride = true;
                 } else if (strcmp(action, "prev") == 0) {
                     musicPrev();
+                    musicManualOverride = true;
                 } else if (strcmp(action, "stop") == 0) {
                     musicStop();
+                    musicManualOverride = false;
                 }
                 sleepResetActivity();
                 wsLog("[music] commande: %s", action);
+            } else if (strcmp(evtype, "monitor") == 0) {
+                monitorMode = doc["enabled"] | false;
+                wsLog("[monitor] micro = %s", monitorMode ? "ON" : "OFF");
+            } else if (strcmp(evtype, "music_mute_moving") == 0) {
+                bool en = doc["enabled"] | false;
+                musicMuteWhileMoving = en;
+                prefs.begin("scooter", false);
+                prefs.putBool("muteMoving", en);
+                prefs.end();
+                wsLog("[music] mute en roulant = %s", en ? "ON" : "OFF");
+            } else if (strcmp(evtype, "speed_limit") == 0) {
+                int kmh = doc["kmh"] | 25;
+                if (kmh < 1)  kmh = 1;
+                if (kmh > 50) kmh = 50;
+                speedLimitKmh = (uint8_t)kmh;
+                float freq = 220.0f + (kmh - 5) * (660.0f / 27.0f);
+                audioBeep(freq, 60);
+                wsLog("[speed_limit] vitesse max = %d km/h", kmh);
             } else if (strcmp(evtype, "lock") == 0) {
                 bool newLocked = doc["locked"] | true;
+                // Grace period : ignorer tout lock:true envoyé automatiquement
+                // par le proxy dans les premières secondes de la connexion.
+                // (lock:false est toujours accepté, pour pouvoir déverrouiller.)
+                if (newLocked && wsProxyConnectedAt > 0 &&
+                    (millis() - wsProxyConnectedAt) < LOCK_CMD_GRACE_MS) {
+                    wsLog("[lock] IGNORÉ (handshake proxy <10s)");
+                    break;
+                }
                 scooterLocked = newLocked;
                 wsLog("[lock] trottinette %s", newLocked ? "verrouillée" : "déverrouillée");
                 if (newLocked) {
@@ -692,22 +775,32 @@ static void taskCapture(void *) {
                 lteWasActive = voiceActive;
             } else {
                 // ── Mode WiFi : streaming temps réel via Realtime API ──
-                if (voiceActive && wsProxyConnected && len > 0) {
+                // voice_start/voice_end sur transition PTT : le proxy route vers
+                // OpenAI uniquement pendant un vrai tour de parole. Le monitor
+                // (debug-audio) reçoit le binaire en continu si monitorMode.
+                static bool wifiVoiceWas = false;
+                if (voiceActive && !wifiVoiceWas && wsProxyConnected) {
+                    wsProxy.sendTXT("{\"type\":\"voice_start\",\"format\":\"pcm16\"}");
+                } else if (!voiceActive && wifiVoiceWas && wsProxyConnected) {
+                    if (pcmAccumLen > 0) {
+                        wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
+                        pcmAccumLen = 0;
+                    }
+                    wsProxy.sendTXT("{\"type\":\"voice_end\"}");
+                }
+                wifiVoiceWas = voiceActive;
+
+                bool streaming = voiceActive || monitorMode;
+                if (streaming && wsProxyConnected && len > 0) {
                     if (pcmAccumLen + len <= sizeof(pcmAccum)) {
                         memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
                         pcmAccumLen += len;
                     }
                     if (pcmAccumLen >= sizeof(pcmAccum)) {
                         wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
-                        static uint32_t lastAudioLog = 0;
-                        if (millis() - lastAudioLog > 2000) {
-                            Serial.printf("[audio] envoi bin %u bytes ws=%d\n",
-                                (unsigned)pcmAccumLen, wsProxyConnected);
-                            lastAudioLog = millis();
-                        }
                         pcmAccumLen = 0;
                     }
-                } else if (!voiceActive && pcmAccumLen > 0) {
+                } else if (!streaming && pcmAccumLen > 0) {
                     wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
                     pcmAccumLen = 0;
                 }
@@ -726,11 +819,15 @@ static void onWsServerEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t
     switch (type) {
         case WStype_CONNECTED:
             wsServerClientNum = num;
-            wsLog("[ws-srv] proxy connecté (#%d)\n", num);
+            wsLog("[ws-srv] client local connecté (#%d)\n", num);
             break;
         case WStype_DISCONNECTED:
-            if (wsServerClientNum == num) wsServerClientNum = 255;
-            wsLog("[ws-srv] proxy déconnecté");
+            // Ne logger que sur un vrai changement d'état : la lib peut refire
+            // DISCONNECTED à chaque loop() pour une socket demi-ouverte (spam ~180/s)
+            if (wsServerClientNum == num) {
+                wsServerClientNum = 255;
+                wsLog("[ws-srv] client local déconnecté");
+            }
             break;
         default: break;
     }
@@ -776,6 +873,15 @@ static void sendTelemetry() {
     doc["locked"] = scooterLocked;
     doc["rssi"] = connGetRSSI();
     doc["conn"] = connGetTypeName();
+
+    // Batterie LilyGo (module ESP32 lui-même)
+    float vbatMod = readLilyGoBattery();
+    doc["vbat_mod"] = vbatMod;
+    float pctMod = (vbatMod - LILYGO_BAT_VMIN) / (LILYGO_BAT_VMAX - LILYGO_BAT_VMIN) * 100.0f;
+    if (pctMod < 0.0f) pctMod = 0.0f;
+    if (pctMod > 100.0f) pctMod = 100.0f;
+    doc["batt_mod_pct"] = pctMod;
+    doc["mute_moving"] = (bool)musicMuteWhileMoving;
 
     char buf[320];
     serializeJson(doc, buf, sizeof(buf));
@@ -895,27 +1001,19 @@ static void checkConnectivityWatchdog() {
 //  setup / loop
 // ─────────────────────────────────────────────────────────────────────────────
 void setup() {
-    delay(500);
+    delay(50);  // court délai de stabilisation alim
 
-    // ── Allocation buffer audio LTE tôt (heap non fragmentée) ──────────────
-#if LTE_ENABLED
-    lteAudioCap = 16000 * 2 * 5;  // 5s de PCM16 16kHz = 160KB
-    lteAudioBuf = (uint8_t*)ps_malloc(lteAudioCap);
-    if (!lteAudioBuf) {
-        lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
-    }
-    if (!lteAudioBuf) {
-        lteAudioCap = 16000 * 2 * 3;  // Fallback 3s = 96KB
-        lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
-    }
-    if (lteAudioBuf) {
-        Serial.printf("[lte] buffer audio %u KB alloué (heap=%u)\n",
-            (unsigned)(lteAudioCap / 1024), (unsigned)esp_get_free_heap_size());
-    } else {
-        Serial.printf("[lte] ERREUR buffer audio (heap=%u)\n",
-            (unsigned)esp_get_free_heap_size());
-    }
-#endif
+    // Libérer les GPIO gelés par gpio_deep_sleep_hold_en() avant le deep sleep.
+    // Sans ça, UART/I2S/DAC ne peuvent pas piloter leurs pins au réveil.
+    gpio_deep_sleep_hold_dis();
+
+    // ── ESC UART en TOUT premier — permet de recevoir des trames Flipsky
+    // pendant toute l'init réseau et d'éviter un deep sleep prématuré au boot
+    Serial2.begin(ESC_BAUD, SERIAL_8N1, ESC_RX_PIN, ESC_TX_PIN);
+    lastEscActivityMs = millis();  // départ timer ESC watchdog
+
+    // Buffer audio LTE : alloué plus tard, seulement si on est en mode LTE
+    // (160KB + tâche 20KB dépasse la heap disponible en WiFi)
 
     // ── Détection réveil deep sleep et jingle de boot ──────────────────────
     bool wokeFromSleep = sleepIsWakeFromDeepSleep();
@@ -989,32 +1087,38 @@ void setup() {
     }
 #if LTE_ENABLED
     if (!wifiOk) {
-        Serial.println("[lte] WiFi échoué — tentative LTE...");
-        if (modemInit()) {
-            Serial.println("[lte] modem initialisé");
-            if (modemConnect()) {
-                Serial.println("[lte] connecté via LTE — désactivation WiFi");
-                WiFi.disconnect(true);
-                WiFi.mode(WIFI_OFF);
-                connSetType(CONN_LTE);
-                _wsUseLte = true;
-            } else {
-                Serial.println("[lte] connexion LTE échouée — reboot");
-                ESP.restart();
+        Serial.println("[lte] WiFi indisponible — tentative LTE...");
+        if (modemInit() && modemConnect()) {
+            Serial.println("[lte] connecté via LTE — désactivation WiFi");
+            WiFi.disconnect(false);
+            WiFi.mode(WIFI_OFF);
+            connSetType(CONN_LTE);
+            _wsUseLte = true;
+            // Allouer le buffer audio LTE maintenant
+            lteAudioCap = 16000 * 2 * 5;
+            lteAudioBuf = (uint8_t*)ps_malloc(lteAudioCap);
+            if (!lteAudioBuf) lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
+            if (!lteAudioBuf) {
+                lteAudioCap = 16000 * 2 * 3;
+                lteAudioBuf = (uint8_t*)malloc(lteAudioCap);
             }
+            Serial.printf("[lte] buffer audio %u KB (heap=%u)\n",
+                lteAudioBuf ? (unsigned)(lteAudioCap/1024) : 0,
+                (unsigned)esp_get_free_heap_size());
         } else {
-            Serial.println("[lte] init modem échouée — reboot");
-            ESP.restart();
+            // Ne PAS rebooter : le loop() retentera la connexion en arrière-plan
+            Serial.println("[lte] échec — retry en arrière-plan (pas de reboot)");
+            connSetType(CONN_NONE);
         }
     }
 #else
     if (!wifiOk) {
-        Serial.println("[wifi] pas de fallback LTE — reboot");
-        ESP.restart();
+        Serial.println("[wifi] pas connecté — retry en arrière-plan");
+        connSetType(CONN_NONE);
     }
 #endif
 
-    Serial2.begin(ESC_BAUD, SERIAL_8N1, ESC_RX_PIN, ESC_TX_PIN);
+    // Serial2 déjà initialisé en tête de setup()
     wsLog("[esc] Flipsky UART initialisé");
 
     esp_err_t e = audioInitI2S();
@@ -1032,6 +1136,12 @@ void setup() {
     }
 #endif
 
+    // ── Réglages persistants (NVS) ───────────────────────────────────────────
+    prefs.begin("scooter", true);  // lecture seule
+    musicMuteWhileMoving = prefs.getBool("muteMoving", false);
+    prefs.end();
+    wsLog("[nvs] mute en roulant = %s", musicMuteWhileMoving ? "ON" : "OFF");
+
     // ── Lecteur de musique ──────────────────────────────────────────────────
 #if MUSIC_ENABLED
     musicInit();
@@ -1045,16 +1155,12 @@ void setup() {
     // WebSocket client unique vers proxy (audio + réponses IA)
     wsProxy.beginSSL(PROXY_HOST, PROXY_PORT, "/ws-esp32");
     wsProxy.onEvent(onWsProxyEvent);
-    wsProxy.setReconnectInterval(5000);  // 5s entre les tentatives de reconnexion
-    // Pas de heartbeat WebSocket en LTE : TinyGSM ne lit pas les pongs assez vite.
-    // La détection de connexion morte se fait via le silence timeout (120s)
-    // dans WebSocketsNetworkClientSecure::available()
+    wsProxy.setReconnectInterval(5000);
     if (!_wsUseLte) {
-        wsProxy.enableHeartbeat(15000, 5000, 2);  // heartbeat WiFi seulement
+        wsProxy.enableHeartbeat(15000, 5000, 2);
     }
     wsLog("[ws-proxy] connexion vers wss://%s/ws-esp32\n", PROXY_HOST);
 
-    // Tâche capture + wsProxy sur Core 1
     xTaskCreatePinnedToCore(taskCapture, "taskCapture", 20480, NULL, 2, NULL, 1);
 
     // Bip de démarrage
@@ -1072,8 +1178,7 @@ void setup() {
         delay(30);
     }
 
-    // Attendre 2 s que l'ADC et la tension de référence se stabilisent
-    // (I2S, DAC, WiFi radio tous actifs → référence analogique stable)
+    // Attendre que l'ADC et la tension de référence se stabilisent
     wsLog("[cal] attente stabilisation ADC (2 s)...");
     delay(2000);
 
@@ -1089,10 +1194,24 @@ void setup() {
         }
         throttleAdcMin = samples[100]; // médiane
     }
-    // brakeAdcMin : valeur fixe config.h (GPIO39 stable, pas de circuit parasite)
-    wsLog("[cal] thr_min=%d brk_min=%d (fixe)\n", throttleAdcMin, brakeAdcMin);
+    // Calibration frein au repos (même méthode que throttle)
+    {
+        int samples[200];
+        for (int i = 0; i < 200; i++) { samples[i] = analogRead(BRAKE_ADC_PIN); delay(10); }
+        for (int i = 1; i < 200; i++) {
+            int k = samples[i], j = i - 1;
+            while (j >= 0 && samples[j] > k) { samples[j+1] = samples[j]; j--; }
+            samples[j+1] = k;
+        }
+        brakeAdcMin = samples[100];
+    }
+    Serial.printf("[cal] thr_min=%d brk_min=%d\n", throttleAdcMin, brakeAdcMin);
 
     wsLog("[setup] prêt — appuyer sur le bouton pour activer le micro");
+
+    // Réinitialiser le watchdog ESC juste avant loop() : si setup() a pris du
+    // temps (init modem ~10s), on ne veut pas déclencher un deep sleep immédiat.
+    lastEscActivityMs = millis();
 }
 
 void loop() {
@@ -1200,9 +1319,69 @@ void loop() {
         }
     }
 
+    // ── Détection ESC éteinte : retour deep sleep après timeout sans trame ────
+    // Désactivé si POWER_MGMT_ENABLED=0 (alim directe batterie trottinette) :
+    // on garde l'ESP éveillé et connecté même si l'ESC ne répond pas.
+#if POWER_MGMT_ENABLED
+    if ((millis() - lastEscActivityMs) > ESC_POWERDOWN_TIMEOUT_MS) {
+        Serial.printf("[esc] aucune trame depuis %lu ms → DEEP SLEEP\n",
+                      (unsigned long)(millis() - lastEscActivityMs));
+        // Stopper la musique si active (le jingle sleep la remplace)
+#if MUSIC_ENABLED
+        musicStop();
+#endif
+        sleepEnterDeepSleep();  // joue le jingle puis deep sleep (ne revient jamais)
+    }
+#endif
+
     // ── Lecteur de musique : tick non-bloquant ───────────────────────────────
 #if MUSIC_ENABLED
-    musicTick(voiceActive);
+    {
+        // Vitesse actuelle (km/h)
+        float curSpeed = fabsf(escData.rpm) / (float)ESC_POLE_PAIRS * 60.0f / 1000.0f;
+
+        static bool wasVoiceActive = false;
+
+        if (voiceActive) {
+            // Mode vocal : couper complètement la musique
+            if (musicIsActive()) {
+                musicStop();
+                musicManualOverride = false;
+            }
+        } else if (curSpeed < 0.5f) {
+            // À l'arrêt : couper la musique SAUF si lancée manuellement
+            if (musicIsActive() && !musicManualOverride) musicStop();
+        } else if (musicMuteWhileMoving && !musicManualOverride) {
+            // Mute en roulant activé (dashboard) : pas de musique auto
+            if (musicIsActive()) musicStop();
+        } else {
+            // Roulage : démarrer la musique auto (Mario) si rien ne joue
+            if (!musicIsActive()) {
+                musicPlay(MUSIC_TRACK_MARIO);
+                musicManualOverride = false;  // démarrage auto
+            }
+
+            // Bascule Mario ↔ Étoile selon vitesse (hystérésis 13/15 km/h)
+            if (musicIsActive()) {
+                uint8_t tr = musicGetTrackIndex();
+                if (tr == MUSIC_TRACK_MARIO && curSpeed > 15.0f) {
+                    musicPlay(MUSIC_TRACK_MARIO_STAR);
+                } else if (tr == MUSIC_TRACK_MARIO_STAR && curSpeed < 13.0f) {
+                    musicPlay(MUSIC_TRACK_MARIO);
+                }
+            }
+
+            // Tempo linéaire : 0 km/h → 0.6x, 25 km/h → 1.6x
+            float v = curSpeed;
+            if (v < 0.0f) v = 0.0f;
+            if (v > 25.0f) v = 25.0f;
+            float speedFactor = 0.6f + (1.0f / 25.0f) * v;
+            musicSetTempo(1.0f / speedFactor);
+        }
+        wasVoiceActive = voiceActive;
+
+        musicTick(voiceActive);
+    }
 #endif
 
     // ── Scan WiFi périodique pour géolocalisation (toutes les 5 min) ────────
@@ -1266,8 +1445,10 @@ void loop() {
     if (millis() - lastControl >= 50) {
         lastControl = millis();
 #if !FAKE_TELEMETRY
-        // Attendre 3s après le boot pour laisser l'ESC finir son initialisation
+        // Attendre 3s après le boot pour laisser l'ESC finir son initialisation.
+        // Pendant ce délai, maintenir le watchdog ESC (sinon deep sleep au bout de 200 ms).
         const bool escReady = (millis() >= 3000);
+        if (!escReady) lastEscActivityMs = millis();
         if (escReady) {
         // Priorité IA pendant AI_CMD_PRIORITY_MS, ensuite manette physique
         // Si verrouillée : ignorer manette ET commandes IA
@@ -1340,6 +1521,48 @@ void loop() {
             }
             if (targetThrottle > gearMax) targetThrottle = gearMax;
 
+            // Limite de vitesse avec prédiction (anticipation).
+            // On prédit la vitesse à t+LOOKAHEAD en extrapolant la dérivée ;
+            // si la prédiction dépasse la limite, on coupe tôt. Ça compense
+            // l'inertie du moteur et évite le dépassement à vide.
+            if (targetThrottle > FTESC_THROTTLE_NEUTRAL) {
+                static float    cap           = 1.0f;
+                static float    prevSpeedKmh  = 0.0f;
+                static uint32_t lastCapMs     = 0;
+
+                uint32_t now = millis();
+                float    dt  = (lastCapMs == 0) ? 0.05f : (now - lastCapMs) / 1000.0f;
+                lastCapMs    = now;
+                if (dt > 0.2f || dt < 0.001f) dt = 0.05f;
+
+                // Vitesse brute (pas de filtre — on veut réagir vite)
+                float curSpeedKmh = fabsf(escData.rpm) / (float)ESC_POLE_PAIRS * 60.0f / 1000.0f;
+                float dSpeed      = (curSpeedKmh - prevSpeedKmh) / dt;  // km/h / s
+                prevSpeedKmh      = curSpeedKmh;
+
+                // Prédiction 0.5 s dans le futur (anticipe l'inertie moteur)
+                const float LOOKAHEAD_S = 0.5f;
+                float predSpeed = curSpeedKmh + dSpeed * LOOKAHEAD_S;
+
+                float limit = (float)speedLimitKmh;
+                const float BAND = 3.0f;
+                float target = (limit - predSpeed) / BAND;
+                if (target < 0.0f) target = 0.0f;
+                if (target > 1.0f) target = 1.0f;
+
+                // Rate-limit du cap : descente instantanée, montée lente
+                const float RATE_UP = 0.4f;  // 2.5 s pour 0→1
+                float stepUp = RATE_UP * dt;
+                if (target < cap) cap = target;                // descente immédiate
+                else if (target > cap + stepUp) cap += stepUp; // montée lente
+                else cap = target;
+                if (cap < 0.0f) cap = 0.0f;
+                if (cap > 1.0f) cap = 1.0f;
+
+                uint16_t delta = targetThrottle - FTESC_THROTTLE_NEUTRAL;
+                targetThrottle = FTESC_THROTTLE_NEUTRAL + (uint16_t)(delta * cap);
+            }
+
             // Rate limiting :
             //   démarrage (RPM < 100) → immédiat (couple max pour vaincre la charge)
             //   accélération → +150/cycle (~170ms neutre→max)
@@ -1381,12 +1604,16 @@ void loop() {
             ftesc_control(Serial2, escThrottle, currentGear, escBrake);
         }
         if (ftesc_poll(Serial2, escData)) {
-            // RPM → km/h : roue 8.5" (≈0.216m diam) avec réduction ESC_POLE_PAIRS
-            float kmh = fabsf(escData.rpm) / ESC_POLE_PAIRS
-                        * 60.0f * 0.216f * 3.14159f / 1000.0f;
-            wsLog("[esc] thr=%u %.1fkm/h V=%.1fV A=%.2fA RPM=%.0f T=%.1f°C",
-                currentThrottle, kmh, escData.voltage, escData.motorCurrent,
-                escData.rpm, escData.tempFet);
+            lastEscActivityMs = millis();
+            static uint32_t _lastEscLog = 0;
+            if (millis() - _lastEscLog > 2000) {
+                _lastEscLog = millis();
+                Serial.printf("[esc] thr=%u locked=%d aiAct=%d RPM=%.0f V=%.1f A=%.2f thrRaw=%d thrMin=%d brkRaw=%d brkMin=%d\n",
+                    currentThrottle, (int)scooterLocked, (int)(millis() - lastAiCmd < AI_CMD_PRIORITY_MS),
+                    escData.rpm, escData.voltage, escData.motorCurrent,
+                    analogRead(THROTTLE_ADC_PIN), throttleAdcMin,
+                    analogRead(BRAKE_ADC_PIN), brakeAdcMin);
+            }
         }
         }  // end if (escReady)
 #endif
@@ -1495,7 +1722,8 @@ void loop() {
 #endif
 
     // ── Moniteur d'inactivité → machine à états de puissance ─────────────────
-    // Vérifier toutes les secondes si le système est inactif
+    // Désactivé si POWER_MGMT_ENABLED=0 (alim directe batterie trottinette)
+#if POWER_MGMT_ENABLED
     {
         static uint32_t lastSleepCheck = 0;
         if (millis() - lastSleepCheck >= 1000) {
@@ -1507,8 +1735,10 @@ void loop() {
             bool pttNow = (digitalRead(GEAR_R_PIN) == LOW);
             bool aiNow  = (millis() - lastAiCmd < AI_CMD_PRIORITY_MS);
 
+            if (monitorMode) sleepResetActivity();  // monitor actif = garder I2S éveillé
             sleepCheckInactivity(thrRaw, brkRaw, pttNow, aiNow,
                                  wsProxyConnected, throttleAdcMin, brakeAdcMin);
         }
     }
+#endif
 }

@@ -8,7 +8,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Version firmware ─────────────────────────────────────────────────────────
-#define FW_VERSION  "1.5.0"
+// Format : année.mois.révision (ex. 2026.06.01). La VRAIE version est injectée
+// automatiquement par le pipeline de release (CI tag → proxy.js patche ce
+// #define avant compilation). Cette valeur n'est qu'un placeholder pour les
+// builds locaux/dev : la garder < à la 1re révision du mois pour que toute
+// release officielle soit bien proposée comme mise à jour.
+#define FW_VERSION  "2026.06.0"
 
 // ── Flags de développement ───────────────────────────────────────────────────
 // FAKE_TELEMETRY : simule vitesse/tension/GPS (pas besoin d'ESC branché)
@@ -49,7 +54,7 @@
 
 #define MIC_CHUNK_SAMPLES   512     // Samples par chunk I2S (~32 ms à 16 kHz)
 #define MIC_GAIN            12      // Gain numérique appliqué au PCM brut
-#define VOLUME_GAIN         2.5f    // Gain de volume pour la sortie DAC
+#define VOLUME_GAIN         3.2f    // Gain de volume pour la sortie DAC (voix IA)
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Audio — Haut-parleur DAC
@@ -85,6 +90,19 @@
 #define ESC_POLE_PAIRS      15    // Paires de pôles du moteur (conversion RPM→vitesse)
 
 // Les defines FTESC_THROTTLE_* et FTESC_GEAR_* sont dans flipsky.h
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Batterie LilyGo (module ESP32) — ADC via diviseur 2:1 sur GPIO 35
+// ─────────────────────────────────────────────────────────────────────────────
+#define LILYGO_BAT_ADC_PIN   35     // Entrée ADC (input-only, RTC)
+#define LILYGO_BAT_DIVIDER   2.0f   // Facteur diviseur résistif (R1=R2)
+#define LILYGO_BAT_VMIN      3.3f   // ~0 %
+#define LILYGO_BAT_VMAX      4.2f   // ~100 %
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Détection extinction ESC → retour en deep sleep
+// ─────────────────────────────────────────────────────────────────────────────
+#define ESC_POWERDOWN_TIMEOUT_MS  200     // 200 ms sans trame ESC → deep sleep
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  WebSocket serveur local (télémétrie directe sur le réseau WiFi)
@@ -157,13 +175,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Deep sleep et gestion d'énergie multi-niveaux
 // ─────────────────────────────────────────────────────────────────────────────
+// Gestion d'énergie désactivée : alimentation directe sur la batterie de la
+// trottinette (plus de batterie LilyGo). Évite la coupure I2S (monitor) et les
+// déconnexions OpenAI/proxy/deep-sleep. Mettre à 1 pour réactiver la veille.
+#define POWER_MGMT_ENABLED      0
+
 // Transitions : ACTIVE → IDLE_LIGHT (2min) → IDLE_DEEP (10min) → SLEEP (30min)
 #define IDLE_LIGHT_TIMEOUT_MS   120000    // 2 min → mode veille légère
 #define IDLE_DEEP_TIMEOUT_MS    600000    // 10 min → mode veille profonde partielle
 #define SLEEP_TIMEOUT_MS        1800000   // 30 min → deep sleep ESP32
 
 // Heartbeat en deep sleep (réveil timer périodique)
-#define SLEEP_HEARTBEAT_SEC     300       // 5 minutes entre chaque réveil
+#define SLEEP_HEARTBEAT_SEC     0         // pas de réveil périodique (wake uniquement sur GPIO)
 
 // Seuil ADC pour réveil par manette
 #define THROTTLE_WAKE_THRESHOLD 50
