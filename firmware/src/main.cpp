@@ -20,6 +20,7 @@
 // modem.h et lora.h sont inclus par connectivity.h et utilisés via leurs gardes
 #include "lora.h"
 #include <Update.h>
+#include <Preferences.h>
 
 static FlipskyData escData;
 // Dernière activité ESC (initialisée à millis() au boot dans setup()).
@@ -84,6 +85,11 @@ static void wsLog(const char *fmt, ...) {
 // ─────────────────────────────────────────────────────────────────────────────
 static volatile bool voiceActive = false;
 
+// Monitor micro : si true, le micro est streamé en continu vers le proxy
+// (clients debug-audio du dashboard) SANS déclencher l'agent vocal OpenAI.
+// Activé/désactivé par le proxy selon les clients monitor connectés. WiFi seulement.
+static volatile bool monitorMode = false;
+
 // Flag global pour le bridge réseau WiFi/LTE (utilisé par WebSocketsNetworkClientSecure)
 volatile bool _wsUseLte = false;
 
@@ -99,6 +105,13 @@ static volatile uint32_t wsProxyConnectedAt = 0;
 // Musique lancée manuellement (dashboard/boutons) : ne doit pas être arrêtée
 // automatiquement à l'arrêt de la trottinette
 static volatile bool musicManualOverride = false;
+
+// Stockage persistant NVS (survit aux reboots)
+static Preferences prefs;
+
+// Mute musique en roulant : si true, pas de musique auto pendant le roulage.
+// Réglable depuis le dashboard, persistant entre les reboots (NVS).
+static volatile bool musicMuteWhileMoving = false;
 
 // Limite de vitesse configurable depuis le dashboard (km/h)
 // Si vitesse actuelle ≥ cette valeur, throttle est forcé au neutre.
@@ -282,7 +295,11 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
             if (deserializeJson(doc, payload, length)) break;
             const char *evtype = doc["type"] | "";
 
-            if (strcmp(evtype, "audio_begin") == 0) {
+            if (strcmp(evtype, "audio_stop") == 0) {
+                dacHead = dacTail = 0;
+                dacPreBuffering = false;
+                wsLog("[audio] arrêt lecture forcée");
+            } else if (strcmp(evtype, "audio_begin") == 0) {
                 // Proxy signale le début d'une réponse audio complète
                 dacHead = dacTail = 0;  // Reset ring buffer
                 dacPreBuffering = true;
@@ -413,11 +430,23 @@ static void onWsProxyEvent(WStype_t type, uint8_t *payload, size_t length) {
                 }
                 sleepResetActivity();
                 wsLog("[music] commande: %s", action);
+            } else if (strcmp(evtype, "monitor") == 0) {
+                monitorMode = doc["enabled"] | false;
+                wsLog("[monitor] micro = %s", monitorMode ? "ON" : "OFF");
+            } else if (strcmp(evtype, "music_mute_moving") == 0) {
+                bool en = doc["enabled"] | false;
+                musicMuteWhileMoving = en;
+                prefs.begin("scooter", false);
+                prefs.putBool("muteMoving", en);
+                prefs.end();
+                wsLog("[music] mute en roulant = %s", en ? "ON" : "OFF");
             } else if (strcmp(evtype, "speed_limit") == 0) {
                 int kmh = doc["kmh"] | 25;
                 if (kmh < 1)  kmh = 1;
                 if (kmh > 50) kmh = 50;
                 speedLimitKmh = (uint8_t)kmh;
+                float freq = 220.0f + (kmh - 5) * (660.0f / 27.0f);
+                audioBeep(freq, 60);
                 wsLog("[speed_limit] vitesse max = %d km/h", kmh);
             } else if (strcmp(evtype, "lock") == 0) {
                 bool newLocked = doc["locked"] | true;
@@ -740,22 +769,32 @@ static void taskCapture(void *) {
                 lteWasActive = voiceActive;
             } else {
                 // ── Mode WiFi : streaming temps réel via Realtime API ──
-                if (voiceActive && wsProxyConnected && len > 0) {
+                // voice_start/voice_end sur transition PTT : le proxy route vers
+                // OpenAI uniquement pendant un vrai tour de parole. Le monitor
+                // (debug-audio) reçoit le binaire en continu si monitorMode.
+                static bool wifiVoiceWas = false;
+                if (voiceActive && !wifiVoiceWas && wsProxyConnected) {
+                    wsProxy.sendTXT("{\"type\":\"voice_start\",\"format\":\"pcm16\"}");
+                } else if (!voiceActive && wifiVoiceWas && wsProxyConnected) {
+                    if (pcmAccumLen > 0) {
+                        wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
+                        pcmAccumLen = 0;
+                    }
+                    wsProxy.sendTXT("{\"type\":\"voice_end\"}");
+                }
+                wifiVoiceWas = voiceActive;
+
+                bool streaming = voiceActive || monitorMode;
+                if (streaming && wsProxyConnected && len > 0) {
                     if (pcmAccumLen + len <= sizeof(pcmAccum)) {
                         memcpy(pcmAccum + pcmAccumLen, pcmBuf, len);
                         pcmAccumLen += len;
                     }
                     if (pcmAccumLen >= sizeof(pcmAccum)) {
                         wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
-                        static uint32_t lastAudioLog = 0;
-                        if (millis() - lastAudioLog > 2000) {
-                            Serial.printf("[audio] envoi bin %u bytes ws=%d\n",
-                                (unsigned)pcmAccumLen, wsProxyConnected);
-                            lastAudioLog = millis();
-                        }
                         pcmAccumLen = 0;
                     }
-                } else if (!voiceActive && pcmAccumLen > 0) {
+                } else if (!streaming && pcmAccumLen > 0) {
                     wsProxy.sendBIN((uint8_t*)pcmAccum, pcmAccumLen);
                     pcmAccumLen = 0;
                 }
@@ -774,11 +813,15 @@ static void onWsServerEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t
     switch (type) {
         case WStype_CONNECTED:
             wsServerClientNum = num;
-            wsLog("[ws-srv] proxy connecté (#%d)\n", num);
+            wsLog("[ws-srv] client local connecté (#%d)\n", num);
             break;
         case WStype_DISCONNECTED:
-            if (wsServerClientNum == num) wsServerClientNum = 255;
-            wsLog("[ws-srv] proxy déconnecté");
+            // Ne logger que sur un vrai changement d'état : la lib peut refire
+            // DISCONNECTED à chaque loop() pour une socket demi-ouverte (spam ~180/s)
+            if (wsServerClientNum == num) {
+                wsServerClientNum = 255;
+                wsLog("[ws-srv] client local déconnecté");
+            }
             break;
         default: break;
     }
@@ -832,6 +875,7 @@ static void sendTelemetry() {
     if (pctMod < 0.0f) pctMod = 0.0f;
     if (pctMod > 100.0f) pctMod = 100.0f;
     doc["batt_mod_pct"] = pctMod;
+    doc["mute_moving"] = (bool)musicMuteWhileMoving;
 
     char buf[320];
     serializeJson(doc, buf, sizeof(buf));
@@ -1086,6 +1130,12 @@ void setup() {
     }
 #endif
 
+    // ── Réglages persistants (NVS) ───────────────────────────────────────────
+    prefs.begin("scooter", true);  // lecture seule
+    musicMuteWhileMoving = prefs.getBool("muteMoving", false);
+    prefs.end();
+    wsLog("[nvs] mute en roulant = %s", musicMuteWhileMoving ? "ON" : "OFF");
+
     // ── Lecteur de musique ──────────────────────────────────────────────────
 #if MUSIC_ENABLED
     musicInit();
@@ -1100,10 +1150,9 @@ void setup() {
     wsProxy.beginSSL(PROXY_HOST, PROXY_PORT, "/ws-esp32");
     wsProxy.onEvent(onWsProxyEvent);
     wsProxy.setReconnectInterval(5000);
-    // Heartbeat désactivé temporairement pour diagnostiquer les déconnexions rapides
-    // if (!_wsUseLte) {
-    //     wsProxy.enableHeartbeat(15000, 5000, 2);
-    // }
+    if (!_wsUseLte) {
+        wsProxy.enableHeartbeat(15000, 5000, 2);
+    }
     wsLog("[ws-proxy] connexion vers wss://%s/ws-esp32\n", PROXY_HOST);
 
     xTaskCreatePinnedToCore(taskCapture, "taskCapture", 20480, NULL, 2, NULL, 1);
@@ -1264,9 +1313,10 @@ void loop() {
         }
     }
 
-    // ── Détection ESC éteinte : retour deep sleep après 15 s sans trame ────
-    // lastEscActivityMs est initialisé à millis() au boot, donc ce check fire
-    // aussi si on s'est réveillé par erreur (PTT, etc.) sans que la drive soit allumée.
+    // ── Détection ESC éteinte : retour deep sleep après timeout sans trame ────
+    // Désactivé si POWER_MGMT_ENABLED=0 (alim directe batterie trottinette) :
+    // on garde l'ESP éveillé et connecté même si l'ESC ne répond pas.
+#if POWER_MGMT_ENABLED
     if ((millis() - lastEscActivityMs) > ESC_POWERDOWN_TIMEOUT_MS) {
         Serial.printf("[esc] aucune trame depuis %lu ms → DEEP SLEEP\n",
                       (unsigned long)(millis() - lastEscActivityMs));
@@ -1276,6 +1326,7 @@ void loop() {
 #endif
         sleepEnterDeepSleep();  // joue le jingle puis deep sleep (ne revient jamais)
     }
+#endif
 
     // ── Lecteur de musique : tick non-bloquant ───────────────────────────────
 #if MUSIC_ENABLED
@@ -1294,6 +1345,9 @@ void loop() {
         } else if (curSpeed < 0.5f) {
             // À l'arrêt : couper la musique SAUF si lancée manuellement
             if (musicIsActive() && !musicManualOverride) musicStop();
+        } else if (musicMuteWhileMoving && !musicManualOverride) {
+            // Mute en roulant activé (dashboard) : pas de musique auto
+            if (musicIsActive()) musicStop();
         } else {
             // Roulage : démarrer la musique auto (Mario) si rien ne joue
             if (!musicIsActive()) {
@@ -1662,7 +1716,8 @@ void loop() {
 #endif
 
     // ── Moniteur d'inactivité → machine à états de puissance ─────────────────
-    // Vérifier toutes les secondes si le système est inactif
+    // Désactivé si POWER_MGMT_ENABLED=0 (alim directe batterie trottinette)
+#if POWER_MGMT_ENABLED
     {
         static uint32_t lastSleepCheck = 0;
         if (millis() - lastSleepCheck >= 1000) {
@@ -1674,8 +1729,10 @@ void loop() {
             bool pttNow = (digitalRead(GEAR_R_PIN) == LOW);
             bool aiNow  = (millis() - lastAiCmd < AI_CMD_PRIORITY_MS);
 
+            if (monitorMode) sleepResetActivity();  // monitor actif = garder I2S éveillé
             sleepCheckInactivity(thrRaw, brkRaw, pttNow, aiNow,
                                  wsProxyConnected, throttleAdcMin, brakeAdcMin);
         }
     }
+#endif
 }

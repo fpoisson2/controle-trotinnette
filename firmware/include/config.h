@@ -8,7 +8,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── Version firmware ─────────────────────────────────────────────────────────
-#define FW_VERSION  "1.5.0"
+// Format : année.mois.révision (ex. 2026.06.1 = 1re révision de juin 2026)
+#define FW_VERSION  "2026.06.1"
 
 // ── Flags de développement ───────────────────────────────────────────────────
 // FAKE_TELEMETRY : simule vitesse/tension/GPS (pas besoin d'ESC branché)
@@ -170,6 +171,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Deep sleep et gestion d'énergie multi-niveaux
 // ─────────────────────────────────────────────────────────────────────────────
+// Gestion d'énergie désactivée : alimentation directe sur la batterie de la
+// trottinette (plus de batterie LilyGo). Évite la coupure I2S (monitor) et les
+// déconnexions OpenAI/proxy/deep-sleep. Mettre à 1 pour réactiver la veille.
+#define POWER_MGMT_ENABLED      0
+
 // Transitions : ACTIVE → IDLE_LIGHT (2min) → IDLE_DEEP (10min) → SLEEP (30min)
 #define IDLE_LIGHT_TIMEOUT_MS   120000    // 2 min → mode veille légère
 #define IDLE_DEEP_TIMEOUT_MS    600000    // 10 min → mode veille profonde partielle

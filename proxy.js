@@ -193,7 +193,7 @@ function broadcastSSE(obj) {
   }
   // Envoyer à la trottinette SEULEMENT les messages qu'elle traite
   // (audio est géré séparément via sendAudioToEsp avec resampling)
-  const espTypes = new Set(['cmd', 'lock', 'music', 'debug', 'speed_limit', 'ota_begin', 'ota_end']);
+  const espTypes = new Set(['cmd', 'lock', 'music', 'music_mute_moving', 'monitor', 'debug', 'speed_limit', 'ota_begin', 'ota_end']);
   if (espTypes.has(obj.type)) {
     const selected = getSelectedScooter();
     if (selected && selected.ws.readyState === WebSocket.OPEN) {
@@ -649,11 +649,10 @@ function connectOpenAI() {
 
   console.log('[openai] connexion WebSocket Realtime...');
   openaiWs = new WebSocket(
-    'wss://api.openai.com/v1/realtime?model=gpt-realtime-1.5',
+    'wss://api.openai.com/v1/realtime?model=gpt-realtime-2',
     {
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        'OpenAI-Beta': 'realtime=v1'
+        Authorization: `Bearer ${OPENAI_API_KEY}`
       }
     }
   );
@@ -683,21 +682,30 @@ function connectOpenAI() {
     openaiWs.send(JSON.stringify({
       type: 'session.update',
       session: {
-        modalities: ['text', 'audio'],
+        type: 'realtime',
+        output_modalities: ['audio'],
         instructions:
           'Contrôle vocal d\'une trottinette. Réponds en français, MAX 1 phrase courte.\n' +
           'Question (batterie, vitesse, tension, temp) → lire_telemetrie\n' +
           'Freiner ou arrêter → commande_trottinette (AVANCER/VITESSE interdits en vocal)\n' +
-          'Appelle l\'outil PUIS confirme brièvement.',
-        voice: 'alloy',
-        input_audio_format: 'pcm16',
-        output_audio_format: 'pcm16',
-        input_audio_transcription: { model: 'gpt-4o-transcribe', language: 'fr' },
-        turn_detection: {
-          type: 'semantic_vad',
-          eagerness: 'medium',
-          create_response: true,
-          interrupt_response: false
+          'RÈGLE ABSOLUE : n\'annonce JAMAIS que tu vas vérifier ou faire quelque chose. ' +
+          'Appelle l\'outil en silence, sans aucun préambule, puis donne UNIQUEMENT le résultat final en 1 phrase. ' +
+          'Ne parle qu\'une seule fois par demande.',
+        audio: {
+          input: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            transcription: { model: 'gpt-4o-transcribe', language: 'fr' },
+            turn_detection: {
+              type: 'semantic_vad',
+              eagerness: 'low',
+              create_response: true,
+              interrupt_response: false
+            }
+          },
+          output: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            voice: 'alloy'
+          }
         },
         tools: [TOOL_SCHEMA, TELEMETRY_TOOL_SCHEMA],
         tool_choice: 'auto'
@@ -1081,6 +1089,23 @@ app.post('/api/speed-limit', (req, res) => {
   }
   broadcastSSE({ type: 'speed_limit', kmh });
   res.json({ ok: true, kmh });
+});
+
+// ── POST /api/music-mute-moving — muter la musique en roulant (persistant NVS) ──
+app.post('/api/music-mute-moving', (req, res) => {
+  const enabled = !!req.body?.enabled;
+  broadcastSSE({ type: 'music_mute_moving', enabled });
+  res.json({ ok: true, enabled });
+});
+
+// ── POST /api/audio-stop — arrêter la lecture audio sur la trottinette ──
+app.post('/api/audio-stop', (req, res) => {
+  const selected = getSelectedScooter();
+  if (!selected) return res.status(503).json({ error: 'Aucune trottinette connectée' });
+  if (selected.ws.readyState === WebSocket.OPEN) {
+    try { selected.ws.send(JSON.stringify({ type: 'audio_stop' })); } catch (_) {}
+  }
+  res.json({ ok: true });
 });
 
 // ── POST /api/music — contrôle musique sur la trottinette sélectionnée ──
@@ -1738,12 +1763,20 @@ app.post('/api/ota/github', async (req, res) => {
 // ─── Debug audio : écouter le micro ESP32 depuis le navigateur ────────────────
 let debugAudioClients = [];  // WebSocket clients qui écoutent le micro
 const debugAudioWss = new WebSocket.Server({ noServer: true });
+function setEspMonitor(enabled) {
+  // Même chemin de livraison que speed_limit (broadcastSSE → trottinette sélectionnée)
+  console.log(`[monitor] micro ${enabled ? 'ON' : 'OFF'}`);
+  broadcastSSE({ type: 'monitor', enabled });
+}
 debugAudioWss.on('connection', (ws) => {
+  const wasEmpty = debugAudioClients.length === 0;
   debugAudioClients.push(ws);
   console.log(`[debug-audio] client connecté (total: ${debugAudioClients.length})`);
+  if (wasEmpty) setEspMonitor(true);  // démarrer le stream micro sur l'ESP
   ws.on('close', () => {
     debugAudioClients = debugAudioClients.filter(c => c !== ws);
     console.log(`[debug-audio] client déconnecté (total: ${debugAudioClients.length})`);
+    if (debugAudioClients.length === 0) setEspMonitor(false);
   });
 });
 
@@ -1781,7 +1814,7 @@ esp32Wss.on('connection', (ws) => {
       const entry = scooters.get(scooterId);
 
       // Mode streaming LTE : décoder ADPCM et forwarder au Realtime API en temps réel
-      if (entry && entry.voiceStreaming) {
+      if (entry && entry.voiceStreaming && entry.chainedFormat === 'adpcm') {
         if (scooterId === selectedScooterId && openaiWs && openaiWs.readyState === WebSocket.OPEN) {
           // Décoder ce chunk ADPCM → PCM16
           // Chaque chunk a un header ADPCM de 4 bytes
@@ -1826,21 +1859,26 @@ esp32Wss.on('connection', (ws) => {
         return;
       }
 
-      // Mode streaming (WiFi) : audio PCM vers OpenAI Realtime
-      if (scooterId === selectedScooterId) {
+      // Mode streaming (WiFi) : audio PCM16.
+      // Vers OpenAI UNIQUEMENT pendant un vrai tour de parole (voice_start/end),
+      // pour que le monitor micro n'active pas l'agent vocal.
+      const voiceTurn = entry && entry.voiceStreaming && entry.chainedFormat !== 'adpcm';
+      if (voiceTurn && scooterId === selectedScooterId) {
         audioFromEsp = true;  // réponse audio → ESP
         if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+          const pcm16_24k = resample16to24(Buffer.from(data));
           openaiWs.send(JSON.stringify({
             type: 'input_audio_buffer.append',
-            audio: Buffer.from(data).toString('base64')
+            audio: pcm16_24k.toString('base64')
           }));
         } else {
           console.warn(`[audio] openaiWs pas prêt (state=${openaiWs?.readyState}, connected=${openaiConnected})`);
         }
-        for (const c of debugAudioClients) {
-          if (c.readyState === WebSocket.OPEN) {
-            try { c.send(data, { binary: true }); } catch (_) {}
-          }
+      }
+      // Le monitor micro reçoit toujours le PCM16 brut (voix OU monitor seul)
+      for (const c of debugAudioClients) {
+        if (c.readyState === WebSocket.OPEN) {
+          try { c.send(data, { binary: true }); } catch (_) {}
         }
       }
     } else {

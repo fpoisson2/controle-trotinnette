@@ -269,7 +269,7 @@ function updatePill(id, idM, value, decimals) {
 function applyTelemetry(data) {
   if (data.speed   !== undefined) updateSpeedometer(data.speed);
   if (data.voltage !== undefined) updatePill('val-voltage', 'val-voltage-m', data.voltage, 1);
-  if (data.vbat_mod !== undefined) updatePill('val-vbat-mod', 'val-vbat-mod-m', data.vbat_mod, 2);
+  if (data.mute_moving !== undefined && data.mute_moving !== muteMovingState) setMuteMovingUI(data.mute_moving);
   if (data.current !== undefined) updatePill('val-current', 'val-current-m', data.current, 1);
   if (data.temp    !== undefined) updatePill('val-temp',    'val-temp-m',    data.temp,    0);
   if (data.rssi !== undefined) updateSignalBars(data.rssi);
@@ -423,12 +423,34 @@ function handleSSEMessage(msg) {
 
 // ── Lecture audio PCM16 ──────────────────────────────────────────────────────
 let assistantMuted = false;
+let currentAudioSrc = null;
 
 function toggleMute() {
   assistantMuted = !assistantMuted;
   const item = document.getElementById('mute-item');
   if (item) item.classList.toggle('active', assistantMuted);
-  if (assistantMuted) { audioQueue.length = 0; isPlayingAudio = false; }
+  if (assistantMuted) {
+    audioQueue.length = 0;
+    isPlayingAudio = false;
+    if (currentAudioSrc) { try { currentAudioSrc.stop(); } catch (_) {} currentAudioSrc = null; }
+    authFetch('/api/audio-stop', { method: 'POST' }).catch(() => {});
+  }
+}
+
+// ── Mute musique en roulant (persistant côté ESP32 via NVS) ──────────────────
+let muteMovingState = false;
+function toggleMuteMoving() {
+  muteMovingState = !muteMovingState;
+  setMuteMovingUI(muteMovingState);
+  authFetch('/api/music-mute-moving', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: muteMovingState })
+  }).catch(() => {});
+}
+function setMuteMovingUI(on) {
+  muteMovingState = on;
+  const item = document.getElementById('mute-moving-item');
+  if (item) item.classList.toggle('active', on);
 }
 
 function enqueueAudio(base64) {
@@ -451,7 +473,7 @@ async function playNextAudio() {
       const decoded = await audioCtx.decodeAudioData(bytes.buffer.slice(0));
       const src = audioCtx.createBufferSource();
       src.buffer = decoded; src.connect(audioCtx.destination);
-      src.start(); src.onended = playNextAudio; return;
+      currentAudioSrc = src; src.start(); src.onended = () => { currentAudioSrc = null; playNextAudio(); }; return;
     }
     const samples = bytes.length / 2;
     const buf = audioCtx.createBuffer(1, samples, 24000);
@@ -460,7 +482,7 @@ async function playNextAudio() {
     for (let i = 0; i < samples; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
     const src = audioCtx.createBufferSource();
     src.buffer = buf; src.connect(audioCtx.destination);
-    src.start(); src.onended = playNextAudio;
+    currentAudioSrc = src; src.start(); src.onended = () => { currentAudioSrc = null; playNextAudio(); };
   } catch (err) { console.warn('[audio]', err); playNextAudio(); }
 }
 
@@ -812,11 +834,16 @@ async function startRecording() {
     if (!audioCtx) audioCtx = new AudioContext({ sampleRate: 16000 });
     // Reprendre l'AudioContext si suspendu (politique autoplay mobile)
     if (audioCtx.state === 'suspended') await audioCtx.resume();
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { sampleRate: 16000, channelCount: 1,
+               echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
     const source = audioCtx.createMediaStreamSource(mediaStream);
     processor = audioCtx.createScriptProcessor(AUDIO_CHUNK, 1, 1);
     processor.onaudioprocess = (e) => {
       if (!isRecording) return;
+      // Half-duplex : ne pas capter pendant que l'IA parle (évite la boucle d'écho)
+      if (isPlayingAudio) return;
       sendAudioChunk(float32ToPCM16(e.inputBuffer.getChannelData(0)));
     };
     source.connect(processor);
@@ -1215,6 +1242,7 @@ async function flashFromGitHub() {
 function onTap(el, callback, label) {
   if (!el) return;
   let touched = false;
+  let lastTouchTime = 0;
   el.addEventListener('touchstart', (e) => {
     e.preventDefault();
     touched = true;
@@ -1224,13 +1252,14 @@ function onTap(el, callback, label) {
     e.preventDefault();
     if (touched) {
       touched = false;
+      lastTouchTime = Date.now();
       console.log('[tap:touchend → action]', label || el.id || el.className);
       callback();
     }
   }, { passive: false });
-  // Fallback click pour desktop (souris, pas de touch)
+  // Fallback click pour desktop — ignorer le click synthetique post-touch
   el.addEventListener('click', (e) => {
-    if (touched) { touched = false; return; } // deja gere par touch
+    if (Date.now() - lastTouchTime < 500) return;
     console.log('[tap:click → action]', label || el.id || el.className);
     callback();
   });
