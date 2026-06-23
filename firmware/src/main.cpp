@@ -196,6 +196,10 @@ static void wifiBegin() {
     WiFi.disconnect(true);
     delay(50);
     WiFi.mode(WIFI_STA);
+    // Fiabilité connexion (surtout après un soft-reset OTA) :
+    WiFi.persistent(false);       // ne pas réécrire la config en flash à chaque begin
+    WiFi.setSleep(false);         // pas de modem-sleep : alim directe batterie trottinette
+    WiFi.setAutoReconnect(true);  // reconnexion native en complément de la boucle manuelle
 #if WIFI_ENTERPRISE
     esp_wifi_sta_wpa2_ent_set_identity(
         (const uint8_t *)EAP_IDENTITY, strlen(EAP_IDENTITY));
@@ -221,7 +225,9 @@ static bool connectWiFi() {
 
     uint32_t t = millis();
     while (WiFi.status() != WL_CONNECTED) {
-        if (millis() - t > 10000) {
+        // 20s au boot : laisse le temps au WiFi après un soft-reset OTA avant
+        // de basculer en LTE (qui pulse le modem et peut le laisser instable)
+        if (millis() - t > 20000) {
             Serial.println("[wifi] timeout");
             WiFi.disconnect(true);
             return false;

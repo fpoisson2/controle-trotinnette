@@ -9,7 +9,7 @@
 
 // ── Version firmware ─────────────────────────────────────────────────────────
 // Format : année.mois.révision (ex. 2026.06.1 = 1re révision de juin 2026)
-#define FW_VERSION  "2026.06.1"
+#define FW_VERSION  "2026.06.2"
 
 // ── Flags de développement ───────────────────────────────────────────────────
 // FAKE_TELEMETRY : simule vitesse/tension/GPS (pas besoin d'ESC branché)
