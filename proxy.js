@@ -1446,6 +1446,7 @@ async function fetchGitHubReleases(count = 10) {
     tag: r.tag_name,
     published_at: r.published_at,
     tarball_url: r.tarball_url,
+    prerelease: !!r.prerelease,
     body: r.body || ''
   }));
 }

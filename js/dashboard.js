@@ -1047,11 +1047,19 @@ async function uploadFirmware() {
 let latestRelease = null;
 
 function compareVersions(a, b) {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
+  // Gère le suffixe béta : "2026.06.02-beta.1" < "2026.06.02" (stable)
+  const parse = (v) => {
+    const [core, pre] = String(v).split('-');           // ["2026.06.02", "beta.1"]
+    return { nums: core.split('.').map(Number), pre: pre || '' };
+  };
+  const pa = parse(a), pb = parse(b);
   for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
+    if ((pa.nums[i] || 0) !== (pb.nums[i] || 0)) return (pa.nums[i] || 0) - (pb.nums[i] || 0);
   }
+  // Cœurs égaux : un stable (sans suffixe) est plus récent qu'une béta
+  if (!pa.pre && pb.pre) return 1;
+  if (pa.pre && !pb.pre) return -1;
+  if (pa.pre && pb.pre) return pa.pre.localeCompare(pb.pre, undefined, { numeric: true });
   return 0;
 }
 
@@ -1127,7 +1135,8 @@ async function loadReleasesList() {
       const opt = document.createElement('option');
       opt.value = rel.version;
       const readyTag = rel.build_ready ? ' [pret]' : '';
-      opt.textContent = `v${rel.version} (${new Date(rel.published_at).toLocaleDateString('fr-FR')})${readyTag}`;
+      const betaTag = rel.prerelease ? ' (béta)' : '';
+      opt.textContent = `v${rel.version}${betaTag} (${new Date(rel.published_at).toLocaleDateString('fr-FR')})${readyTag}`;
       select.appendChild(opt);
     }
     select.onchange = () => { rollbackBtn.disabled = !select.value; };
